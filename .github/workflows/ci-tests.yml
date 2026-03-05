@@ -28,13 +28,14 @@ jobs:
           echo "PATH=$DOTNET_INSTALL_DIR:$PATH" >> "$GITHUB_ENV"
 
       - name: Run DotNet CLI Tests
-        run: >
-          dotnet test Jellyfin.sln
-          --configuration Release
-          --collect:"XPlat Code Coverage"
-          --settings tests/coverletArgs.runsettings
-          --verbosity minimal
-          --filter "Category!=RequiresDocker"
+        run: |
+          export PATH="$HOME/.dotnet:$PATH"
+          dotnet test Jellyfin.sln \
+            --configuration Release \
+            --collect:"XPlat Code Coverage" \
+            --settings tests/coverletArgs.runsettings \
+            --verbosity minimal \
+            --filter "Category!=RequiresDocker"
 
       - name: Merge code coverage results
         uses: danielpalme/ReportGenerator-GitHub-Action@ee0ae774f6d3afedcbd1683c1ab21b83670bdf8e # v5.5.1
