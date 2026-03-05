@@ -5,6 +5,7 @@
   <!-- Run "dotnet list package (dash,dash)outdated" to see the latest versions of each package.-->
   <ItemGroup Label="Package Dependencies">
     <PackageVersion Include="AsyncKeyedLock" Version="7.1.8" />
+    <PackageVersion Include="AWSSDK.S3" Version="3.7.410.2" />
     <PackageVersion Include="AutoFixture.AutoMoq" Version="4.18.1" />
     <PackageVersion Include="AutoFixture.Xunit2" Version="4.18.1" />
     <PackageVersion Include="AutoFixture" Version="4.18.1" />
@@ -59,6 +60,7 @@
     <PackageVersion Include="Moq" Version="4.18.4" />
     <PackageVersion Include="NEbml" Version="1.1.0.5" />
     <PackageVersion Include="Newtonsoft.Json" Version="13.0.4" />
+    <PackageVersion Include="Npgsql" Version="9.0.4" />
     <PackageVersion Include="PlaylistsNET" Version="1.4.1" />
     <PackageVersion Include="prometheus-net.AspNetCore" Version="8.2.1" />
     <PackageVersion Include="prometheus-net.DotNetRuntime" Version="4.4.1" />
