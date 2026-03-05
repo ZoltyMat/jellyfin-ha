@@ -3,6 +3,7 @@ name: HA Build & Push to ECR
 on:
   push:
     branches:
+      - master
       - main
       - "feat/ha-*"
 
