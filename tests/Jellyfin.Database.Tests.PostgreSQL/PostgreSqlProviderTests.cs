@@ -19,6 +19,7 @@ namespace Jellyfin.Database.Tests.PostgreSQL;
 /// <summary>
 /// Integration tests for CRUD operations, optimisation, and purge against a real PostgreSQL 16 container.
 /// </summary>
+[Xunit.Trait("Category", "RequiresDocker")]
 public sealed class PostgreSqlProviderTests : IAsyncLifetime
 {
     private readonly PostgreSqlContainer _container;

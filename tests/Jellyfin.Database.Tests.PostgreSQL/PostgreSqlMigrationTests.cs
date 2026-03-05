@@ -15,6 +15,7 @@ namespace Jellyfin.Database.Tests.PostgreSQL;
 /// <summary>
 /// Integration tests that validate PostgreSQL migrations against a real container.
 /// </summary>
+[Xunit.Trait("Category", "RequiresDocker")]
 public sealed class PostgreSqlMigrationTests : IAsyncLifetime
 {
     private readonly PostgreSqlContainer _container;
