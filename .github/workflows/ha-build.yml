@@ -12,7 +12,6 @@ jobs:
     runs-on: [self-hosted, k3s, linux, amd64]
 
     permissions:
-      id-token: write   # required for OIDC-based AWS auth
       contents: read
 
     steps:
@@ -22,7 +21,8 @@ jobs:
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@e3dd6a429d7300a6a4c196c26e071d42e0343502 # v4.0.2
         with:
-          role-to-assume: ${{ secrets.AWS_ECR_ROLE_ARN }}
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ secrets.AWS_REGION }}
 
       - name: Login to Amazon ECR
