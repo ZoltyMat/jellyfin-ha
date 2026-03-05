@@ -1,11 +1,11 @@
 using System;
 using System.Collections.Generic;
-using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Jellyfin.Database.Implementations;
 using Jellyfin.Database.Implementations.DbConfiguration;
 using Microsoft.EntityFrameworkCore;
+using Npgsql;
 
 namespace Jellyfin.Database.Providers.PostgreSQL;
 
@@ -18,24 +18,25 @@ public sealed class PostgreSqlDatabaseProvider : IJellyfinDatabaseProvider
     private const string BackupNotSupportedMessage =
         "Automated migration backups are not supported for PostgreSQL. Use the jellyfin-pg-backup CronJob for nightly S3 backups.";
 
+    private readonly NpgsqlDataSource _dataSource;
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="PostgreSqlDatabaseProvider"/> class.
+    /// </summary>
+    /// <param name="dataSource">The <see cref="NpgsqlDataSource"/> used for PostgreSQL connections.</param>
+    public PostgreSqlDatabaseProvider(NpgsqlDataSource dataSource)
+    {
+        _dataSource = dataSource;
+    }
+
     /// <inheritdoc/>
     public IDbContextFactory<JellyfinDbContext>? DbContextFactory { get; set; }
 
     /// <inheritdoc/>
     public void Initialise(DbContextOptionsBuilder options, DatabaseConfigurationOptions databaseConfiguration)
     {
-        var connectionString =
-            Environment.GetEnvironmentVariable("POSTGRES_CONNECTION_STRING")
-            ?? databaseConfiguration.CustomProviderOptions?.Options
-                ?.FirstOrDefault(o => o.Key.Equals("ConnectionString", StringComparison.OrdinalIgnoreCase))
-                ?.Value
-            ?? databaseConfiguration.CustomProviderOptions?.ConnectionString
-            ?? throw new InvalidOperationException(
-                "No PostgreSQL connection string found. Set the POSTGRES_CONNECTION_STRING environment variable, " +
-                "or provide it via CustomProviderOptions.Options[\"ConnectionString\"] or CustomProviderOptions.ConnectionString.");
-
         options.UseNpgsql(
-            connectionString,
+            _dataSource,
             o => o.MigrationsAssembly(GetType().Assembly.FullName));
     }
 
