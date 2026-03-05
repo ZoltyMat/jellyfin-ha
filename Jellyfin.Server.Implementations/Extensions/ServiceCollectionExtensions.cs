@@ -149,6 +149,23 @@ public static class ServiceCollectionExtensions
                         "No PostgreSQL connection string found. Set the POSTGRES_CONNECTION_STRING environment variable, " +
                         "or provide it via CustomProviderOptions.Options[\"ConnectionString\"] or CustomProviderOptions.ConnectionString.");
 
+                // Support postgresql:// / postgres:// URI format (e.g. DATABASE_URL convention).
+                // NpgsqlDataSourceBuilder requires ADO.NET key=value format; convert if needed.
+                if (connectionString.StartsWith("postgresql://", StringComparison.OrdinalIgnoreCase)
+                    || connectionString.StartsWith("postgres://", StringComparison.OrdinalIgnoreCase))
+                {
+                    var uri = new Uri(connectionString);
+                    var userInfoParts = uri.UserInfo.Split(':', 2);
+                    connectionString = new NpgsqlConnectionStringBuilder
+                    {
+                        Host = uri.Host,
+                        Port = uri.Port > 0 ? uri.Port : 5432,
+                        Database = uri.AbsolutePath.TrimStart('/'),
+                        Username = userInfoParts.Length > 0 ? Uri.UnescapeDataString(userInfoParts[0]) : null,
+                        Password = userInfoParts.Length > 1 ? Uri.UnescapeDataString(userInfoParts[1]) : null,
+                    }.ToString();
+                }
+
                 var dataSourceBuilder = new NpgsqlDataSourceBuilder(connectionString);
 
                 dataSourceBuilder.ConnectionStringBuilder.MinPoolSize = GetPoolOption(options, "MinPoolSize", 2);
