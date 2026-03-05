@@ -1,0 +1,36 @@
+# syntax=docker/dockerfile:1
+# Runtime-only image — the .NET publish step runs on the CI host (runner),
+# not inside this Dockerfile. This avoids DinD overlay-on-overlay I/O throttling
+# which makes `dotnet publish` inside Docker-in-Docker prohibitively slow on k3s.
+
+FROM --platform=linux/amd64 mcr.microsoft.com/dotnet/aspnet:10.0
+
+# Install FFmpeg and native dependencies required by SkiaSharp and fontconfig.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      ffmpeg \
+      fontconfig \
+      libfontconfig1 \
+      libfreetype6 \
+ && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /jellyfin
+
+# Copy the pre-built publish output produced by `dotnet publish` on the CI host.
+COPY publish-output/ .
+
+# Jellyfin default ports
+EXPOSE 8096
+EXPOSE 8920
+
+# Data / config volumes
+VOLUME ["/config", "/cache", "/media"]
+
+ENV JELLYFIN_DATA_DIR=/config \
+    JELLYFIN_CACHE_DIR=/cache \
+    JELLYFIN_LOG_DIR=/config/log \
+    JELLYFIN_CONFIG_DIR=/config
+
+ENTRYPOINT ["./jellyfin", \
+            "--datadir", "/config", \
+            "--cachedir", "/cache"]
