@@ -38,10 +38,10 @@ jobs:
           echo "short_sha=${SHORT_SHA}"  >> "$GITHUB_OUTPUT"
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@b5730edcd31e9b48f4df20d5ffa85b0b35e4bf7e # v3.10.0
+        uses: docker/setup-buildx-action@v3
 
       - name: Build and push image
-        uses: docker/build-push-action@263435318d21b8e681c14492fe198d362a7d2c83 # v6.18.0
+        uses: docker/build-push-action@v6
         with:
           context: .
           file: Dockerfile
