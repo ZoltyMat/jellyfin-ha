@@ -17,9 +17,8 @@ jobs:
     steps:
       - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
 
-      - uses: actions/setup-dotnet@2016bd2012dba4e32de620c46fe006a3ac9f0602 # v5.0.1
-        with:
-          dotnet-version: ${{ env.SDK_VERSION }}
+      # setup-dotnet omitted — self-hosted ARC runners already have .NET 10 installed
+      # setup-dotnet fails on these runners (cannot write to /usr/share/dotnet)
 
       - name: Run DotNet CLI Tests
         run: >
