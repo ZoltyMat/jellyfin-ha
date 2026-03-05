@@ -13,6 +13,7 @@ using MediaBrowser.Controller.Configuration;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Npgsql;
 using JellyfinDbProviderFactory = System.Func<System.IServiceProvider, Jellyfin.Database.Implementations.IJellyfinDatabaseProvider>;
 
 namespace Jellyfin.Server.Implementations.Extensions;
@@ -26,6 +27,12 @@ public static class ServiceCollectionExtensions
     {
         yield return typeof(SqliteDatabaseProvider);
         yield return typeof(PostgreSqlDatabaseProvider);
+    }
+
+    private static int GetPoolOption(IEnumerable<CustomDatabaseOption>? options, string key, int defaultValue)
+    {
+        var value = options?.FirstOrDefault(o => o.Key.Equals(key, StringComparison.OrdinalIgnoreCase))?.Value;
+        return int.TryParse(value, out var parsed) ? parsed : defaultValue;
     }
 
     private static IDictionary<string, JellyfinDbProviderFactory> GetSupportedDbProviders()
@@ -124,6 +131,33 @@ public static class ServiceCollectionExtensions
         }
 
         serviceCollection.AddSingleton<IJellyfinDatabaseProvider>(providerFactory!);
+
+        if (efCoreConfiguration.DatabaseType.Equals("Jellyfin-PostgreSQL", StringComparison.OrdinalIgnoreCase))
+        {
+            serviceCollection.AddSingleton<NpgsqlDataSource>(static sp =>
+            {
+                var config = sp.GetRequiredService<IServerConfigurationManager>().GetConfiguration<DatabaseConfigurationOptions>("database");
+                var options = config.CustomProviderOptions?.Options;
+
+                var connectionString =
+                    Environment.GetEnvironmentVariable("POSTGRES_CONNECTION_STRING")
+                    ?? options
+                        ?.FirstOrDefault(o => o.Key.Equals("ConnectionString", StringComparison.OrdinalIgnoreCase))
+                        ?.Value
+                    ?? config.CustomProviderOptions?.ConnectionString
+                    ?? throw new InvalidOperationException(
+                        "No PostgreSQL connection string found. Set the POSTGRES_CONNECTION_STRING environment variable, " +
+                        "or provide it via CustomProviderOptions.Options[\"ConnectionString\"] or CustomProviderOptions.ConnectionString.");
+
+                var dataSourceBuilder = new NpgsqlDataSourceBuilder(connectionString);
+
+                dataSourceBuilder.ConnectionStringBuilder.MinPoolSize = GetPoolOption(options, "MinPoolSize", 2);
+                dataSourceBuilder.ConnectionStringBuilder.MaxPoolSize = GetPoolOption(options, "MaxPoolSize", 20);
+                dataSourceBuilder.ConnectionStringBuilder.CommandTimeout = GetPoolOption(options, "CommandTimeout", 30);
+
+                return dataSourceBuilder.Build();
+            });
+        }
 
         switch (efCoreConfiguration.LockingBehavior)
         {
