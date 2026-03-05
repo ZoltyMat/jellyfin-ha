@@ -7,7 +7,7 @@ WORKDIR /src
 
 # Restore dependencies first (layer-cache friendly)
 COPY ["Jellyfin.sln", "global.json", "nuget.config", "Directory.Build.props", "Directory.Packages.props", "./"]
-COPY ["SharedVersion.cs", "./"]
+COPY ["SharedVersion.cs", "BannedSymbols.txt", "stylecop.json", "./"]
 
 # Copy all project files so dotnet restore can resolve the full dependency graph
 COPY Emby.Naming/                                   Emby.Naming/
