@@ -9,3 +9,9 @@ deployment/*/dist
 deployment/*/pkg-dist
 deployment/collect-dist/
 ci/
+tests/
+fuzz/
+.github/
+.devcontainer/
+.vscode/
+*.md
