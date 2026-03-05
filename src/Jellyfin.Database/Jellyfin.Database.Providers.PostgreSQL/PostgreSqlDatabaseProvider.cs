@@ -15,8 +15,9 @@ namespace Jellyfin.Database.Providers.PostgreSQL;
 [JellyfinDatabaseProviderKey("Jellyfin-PostgreSQL")]
 public sealed class PostgreSqlDatabaseProvider : IJellyfinDatabaseProvider
 {
-    private const string BackupNotSupportedMessage =
-        "Automated migration backups are not supported for PostgreSQL. Use the jellyfin-pg-backup CronJob for nightly S3 backups.";
+    // Sentinel returned by MigrationBackupFast to signal that no file backup was
+    // created (PostgreSQL backups are handled externally by jellyfin-pg-backup CronJob).
+    private const string NoAutomatedBackupKey = "postgresql-no-automated-backup";
 
     private readonly NpgsqlDataSource _dataSource;
 
@@ -69,19 +70,24 @@ public sealed class PostgreSqlDatabaseProvider : IJellyfinDatabaseProvider
     /// <inheritdoc/>
     public Task<string> MigrationBackupFast(CancellationToken cancellationToken)
     {
-        throw new NotSupportedException(BackupNotSupportedMessage);
+        // PostgreSQL pre-migration backups are handled externally by the
+        // jellyfin-pg-backup CronJob. Return a sentinel so callers know no
+        // file backup was created and the migration can proceed safely.
+        return Task.FromResult(NoAutomatedBackupKey);
     }
 
     /// <inheritdoc/>
     public Task RestoreBackupFast(string key, CancellationToken cancellationToken)
     {
-        throw new NotSupportedException(BackupNotSupportedMessage);
+        // No automated backup was taken; nothing to restore.
+        return Task.CompletedTask;
     }
 
     /// <inheritdoc/>
     public Task DeleteBackup(string key)
     {
-        throw new NotSupportedException(BackupNotSupportedMessage);
+        // No automated backup was taken; nothing to delete.
+        return Task.CompletedTask;
     }
 
     /// <inheritdoc/>
