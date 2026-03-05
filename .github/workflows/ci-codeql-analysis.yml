@@ -11,6 +11,8 @@ on:
 jobs:
   analyze:
     name: Analyze
+    # Disabled in fork — upstream CodeQL requires specific GitHub org permissions and .NET 10 support
+    if: false
     runs-on: [self-hosted, k3s, linux, amd64]
 
     strategy:
