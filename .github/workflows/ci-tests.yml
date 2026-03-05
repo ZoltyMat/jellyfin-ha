@@ -13,12 +13,7 @@ env:
 
 jobs:
   run-tests:
-    strategy:
-      matrix:
-        os: ["ubuntu-latest", "macos-latest", "windows-latest"]
-      fail-fast: false
-
-    runs-on: "${{ matrix.os }}"
+    runs-on: [self-hosted, k3s, linux, amd64]
     steps:
       - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
 
