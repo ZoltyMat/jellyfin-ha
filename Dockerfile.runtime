@@ -28,8 +28,7 @@ VOLUME ["/config", "/cache", "/media"]
 
 ENV JELLYFIN_DATA_DIR=/config \
     JELLYFIN_CACHE_DIR=/cache \
-    JELLYFIN_LOG_DIR=/config/log \
-    JELLYFIN_CONFIG_DIR=/config
+    JELLYFIN_LOG_DIR=/config/log
 
 ENTRYPOINT ["./jellyfin", \
             "--datadir", "/config", \
