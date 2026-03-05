@@ -17,14 +17,15 @@ jobs:
     steps:
       - uses: actions/checkout@8e8c483db84b4bee98b60c0593521ed34d9990e8 # v6.0.1
 
-      # Install .NET to a writable location — self-hosted ARC runners don't allow
-      # writes to /usr/share/dotnet, so we redirect via DOTNET_INSTALL_DIR.
+      # Install .NET — use GITHUB_ENV (not GITHUB_PATH) to set PATH because
+      # ARC self-hosted runner pods don't pick up GITHUB_PATH between steps.
       - name: Install .NET SDK
         run: |
-          export DOTNET_INSTALL_DIR="$HOME/.dotnet"
+          DOTNET_INSTALL_DIR="$HOME/.dotnet"
           mkdir -p "$DOTNET_INSTALL_DIR"
           curl -fsSL https://dot.net/v1/dotnet-install.sh | bash /dev/stdin --channel 10.0 --install-dir "$DOTNET_INSTALL_DIR"
-          echo "$DOTNET_INSTALL_DIR" >> "$GITHUB_PATH"
+          echo "DOTNET_ROOT=$DOTNET_INSTALL_DIR" >> "$GITHUB_ENV"
+          echo "PATH=$DOTNET_INSTALL_DIR:$PATH" >> "$GITHUB_ENV"
 
       - name: Run DotNet CLI Tests
         run: >
