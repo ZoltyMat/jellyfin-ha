@@ -44,8 +44,9 @@ RUN dotnet publish Jellyfin.Server/Jellyfin.Server.csproj \
 
 # ── Web client stage ──────────────────────────────────────────────────────────
 # Install jellyfin-web via the official Jellyfin apt repo.
+# Package suffix in the bookworm repo is +deb12 (e.g. 10.11.6+deb12).
 # Web assets land at /usr/share/jellyfin/web/ — stable, prebuilt, no npm required.
-# Use 10.9.11 (latest released web client; API-compatible with the 10.12.0 server fork).
+# 10.11.6 is the latest stable web client; API-compatible with the 10.12.0 server.
 FROM --platform=linux/amd64 debian:bookworm-slim AS webclient
 
 RUN apt-get update \
@@ -55,9 +56,9 @@ RUN apt-get update \
  && echo "deb [arch=amd64 signed-by=/usr/share/keyrings/jellyfin.gpg] https://repo.jellyfin.org/debian bookworm main" \
     > /etc/apt/sources.list.d/jellyfin.list \
  && apt-get update \
- && apt-get install -y --no-install-recommends jellyfin-web=10.9.11+1 \
+ && apt-get install -y --no-install-recommends "jellyfin-web=10.11.6+deb12" \
  && rm -rf /var/lib/apt/lists/* \
- && ls /usr/share/jellyfin/web/ | head -5
+ && echo "Web client files:" && ls /usr/share/jellyfin/web/ | head -10
 
 # ── Runtime stage ─────────────────────────────────────────────────────────────
 FROM --platform=linux/amd64 mcr.microsoft.com/dotnet/aspnet:10.0
