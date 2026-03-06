@@ -3,6 +3,24 @@
 # not inside this Dockerfile. This avoids DinD overlay-on-overlay I/O throttling
 # which makes `dotnet publish` inside Docker-in-Docker prohibitively slow on k3s.
 
+# ── Web client stage ──────────────────────────────────────────────────────────
+# Install jellyfin-web via the official Jellyfin apt repo.
+# Package suffix in the bookworm repo is +deb12 (e.g. 10.11.6+deb12).
+# Web assets land at /usr/share/jellyfin/web/ — stable, prebuilt, no npm required.
+# 10.11.6 is the latest stable web client; API-compatible with the 10.12.0 server.
+FROM --platform=linux/amd64 debian:bookworm-slim AS webclient
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends curl gnupg ca-certificates \
+ && curl -fsSL https://repo.jellyfin.org/jellyfin_team.gpg.key \
+    | gpg --dearmor -o /usr/share/keyrings/jellyfin.gpg \
+ && echo "deb [arch=amd64 signed-by=/usr/share/keyrings/jellyfin.gpg] https://repo.jellyfin.org/debian bookworm main" \
+    > /etc/apt/sources.list.d/jellyfin.list \
+ && apt-get update \
+ && apt-get install -y --no-install-recommends "jellyfin-web=10.11.6+deb12" \
+ && rm -rf /var/lib/apt/lists/*
+
+# ── Runtime stage ─────────────────────────────────────────────────────────────
 FROM --platform=linux/amd64 mcr.microsoft.com/dotnet/aspnet:10.0
 
 # Install FFmpeg and native dependencies required by SkiaSharp and fontconfig.
@@ -18,6 +36,8 @@ WORKDIR /jellyfin
 
 # Copy the pre-built publish output produced by `dotnet publish` on the CI host.
 COPY publish-output/ .
+# Copy the jellyfin-web client assets from the webclient stage.
+COPY --from=webclient /usr/share/jellyfin/web ./jellyfin-web/
 
 # Jellyfin default ports
 EXPOSE 8096
@@ -32,4 +52,5 @@ ENV JELLYFIN_DATA_DIR=/config \
 
 ENTRYPOINT ["./jellyfin", \
             "--datadir", "/config", \
-            "--cachedir", "/cache"]
+            "--cachedir", "/cache", \
+            "--webdir", "/jellyfin/jellyfin-web"]
