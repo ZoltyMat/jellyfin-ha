@@ -43,12 +43,21 @@ RUN dotnet publish Jellyfin.Server/Jellyfin.Server.csproj \
       --output /app
 
 # ── Web client stage ──────────────────────────────────────────────────────────
-# Pull web client assets from the official Jellyfin image.
-# jellyfin-web 10.9.11 is API-compatible with the 10.12.0 server fork.
-# Replace this stage when an official 10.12.x image ships.
-FROM --platform=linux/amd64 jellyfin/jellyfin:10.9.11 AS webclient
-# web assets are at /jellyfin/jellyfin-web inside the official image
-RUN ls /jellyfin/
+# Install jellyfin-web via the official Jellyfin apt repo.
+# Web assets land at /usr/share/jellyfin/web/ — stable, prebuilt, no npm required.
+# Use 10.9.11 (latest released web client; API-compatible with the 10.12.0 server fork).
+FROM --platform=linux/amd64 debian:bookworm-slim AS webclient
+
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends curl gnupg ca-certificates \
+ && curl -fsSL https://repo.jellyfin.org/jellyfin_team.gpg.key \
+    | gpg --dearmor -o /usr/share/keyrings/jellyfin.gpg \
+ && echo "deb [arch=amd64 signed-by=/usr/share/keyrings/jellyfin.gpg] https://repo.jellyfin.org/debian bookworm main" \
+    > /etc/apt/sources.list.d/jellyfin.list \
+ && apt-get update \
+ && apt-get install -y --no-install-recommends jellyfin-web=10.9.11+1 \
+ && rm -rf /var/lib/apt/lists/* \
+ && ls /usr/share/jellyfin/web/ | head -5
 
 # ── Runtime stage ─────────────────────────────────────────────────────────────
 FROM --platform=linux/amd64 mcr.microsoft.com/dotnet/aspnet:10.0
@@ -66,7 +75,7 @@ RUN apt-get update \
 WORKDIR /jellyfin
 
 COPY --from=build /app .
-COPY --from=webclient /jellyfin/jellyfin-web ./jellyfin-web/
+COPY --from=webclient /usr/share/jellyfin/web ./jellyfin-web/
 
 # Jellyfin default ports
 EXPOSE 8096
