@@ -42,6 +42,14 @@ RUN dotnet publish Jellyfin.Server/Jellyfin.Server.csproj \
       -p:TreatWarningsAsErrors=false \
       --output /app
 
+# ── Web client stage ──────────────────────────────────────────────────────────
+# Pull web client assets from the official Jellyfin image.
+# jellyfin-web 10.9.11 is API-compatible with the 10.12.0 server fork.
+# Replace this stage when an official 10.12.x image ships.
+FROM --platform=linux/amd64 jellyfin/jellyfin:10.9.11 AS webclient
+# web assets are at /jellyfin/jellyfin-web inside the official image
+RUN ls /jellyfin/
+
 # ── Runtime stage ─────────────────────────────────────────────────────────────
 FROM --platform=linux/amd64 mcr.microsoft.com/dotnet/aspnet:10.0
 
@@ -58,6 +66,7 @@ RUN apt-get update \
 WORKDIR /jellyfin
 
 COPY --from=build /app .
+COPY --from=webclient /jellyfin/jellyfin-web ./jellyfin-web/
 
 # Jellyfin default ports
 EXPOSE 8096
@@ -73,4 +82,5 @@ ENV JELLYFIN_DATA_DIR=/config \
 
 ENTRYPOINT ["./jellyfin", \
             "--datadir", "/config", \
-            "--cachedir", "/cache"]
+            "--cachedir", "/cache", \
+            "--webdir", "/jellyfin/jellyfin-web"]
