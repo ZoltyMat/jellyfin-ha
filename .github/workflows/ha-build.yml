@@ -6,6 +6,14 @@ on:
       - master
       - main
       - "feat/ha-*"
+      - "feat/phase*"
+      - "copilot/*"
+  pull_request:
+
+# Cancel in-progress runs when a new push arrives on the same branch.
+concurrency:
+  group: ha-build-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   build-and-push:
@@ -74,7 +82,8 @@ jobs:
           context: .
           file: Dockerfile.runtime
           platforms: linux/amd64
-          push: true
+          # Only push the image on direct branch pushes, not on pull_request events.
+          push: ${{ github.event_name == 'push' }}
           provenance: false
           tags: |
             ${{ steps.meta.outputs.image_repo }}:${{ steps.meta.outputs.short_sha }}
