@@ -70,4 +70,35 @@ public interface ITranscodeSessionStore
     /// Returns an empty enumerable if no sessions are active or if the store cannot be reached.
     /// </returns>
     Task<IEnumerable<TranscodeSession>> GetActiveSessionsAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Persists a live stream session record so that takeover pods can identify and close
+    /// streams that were opened on a pod that has since crashed or been evicted.
+    /// </summary>
+    /// <param name="session">The live stream session to store.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    /// <returns>A <see cref="Task"/> representing the asynchronous operation.</returns>
+    Task SetLiveStreamAsync(LiveStreamSession session, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Attempts to retrieve a live stream session by its live stream identifier and the
+    /// session or play-session identifier that owns it.
+    /// </summary>
+    /// <param name="liveStreamId">The live stream identifier.</param>
+    /// <param name="sessionIdOrPlaySessionId">The session identifier or play-session identifier.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    /// <returns>
+    /// The <see cref="LiveStreamSession"/> if it exists; otherwise <c>null</c>.
+    /// </returns>
+    Task<LiveStreamSession?> TryGetLiveStreamAsync(string liveStreamId, string sessionIdOrPlaySessionId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Removes the live stream session record for the given live stream and session identifier.
+    /// This is called when the stream is closed, either by the owning pod or a takeover pod.
+    /// </summary>
+    /// <param name="liveStreamId">The live stream identifier.</param>
+    /// <param name="sessionIdOrPlaySessionId">The session identifier or play-session identifier.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    /// <returns>A <see cref="Task"/> representing the asynchronous operation.</returns>
+    Task DeleteLiveStreamAsync(string liveStreamId, string sessionIdOrPlaySessionId, CancellationToken cancellationToken = default);
 }

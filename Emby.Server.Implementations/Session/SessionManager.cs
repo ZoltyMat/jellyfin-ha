@@ -28,6 +28,7 @@ using MediaBrowser.Controller.Events;
 using MediaBrowser.Controller.Events.Authentication;
 using MediaBrowser.Controller.Events.Session;
 using MediaBrowser.Controller.Library;
+using MediaBrowser.Controller.MediaEncoding;
 using MediaBrowser.Controller.Net;
 using MediaBrowser.Controller.Session;
 using MediaBrowser.Model.Dto;
@@ -60,6 +61,7 @@ namespace Emby.Server.Implementations.Session
         private readonly IMediaSourceManager _mediaSourceManager;
         private readonly IServerApplicationHost _appHost;
         private readonly IDeviceManager _deviceManager;
+        private readonly ITranscodeSessionStore _transcodeSessionStore;
         private readonly CancellationTokenRegistration _shutdownCallback;
         private readonly ConcurrentDictionary<string, SessionInfo> _activeConnections
             = new(StringComparer.OrdinalIgnoreCase);
@@ -89,6 +91,7 @@ namespace Emby.Server.Implementations.Session
         /// <param name="deviceManager">Instance of <see cref="IDeviceManager"/> interface.</param>
         /// <param name="mediaSourceManager">Instance of <see cref="IMediaSourceManager"/> interface.</param>
         /// <param name="hostApplicationLifetime">Instance of <see cref="IHostApplicationLifetime"/> interface.</param>
+        /// <param name="transcodeSessionStore">Instance of <see cref="ITranscodeSessionStore"/> interface.</param>
         public SessionManager(
             ILogger<SessionManager> logger,
             IEventManager eventManager,
@@ -102,7 +105,8 @@ namespace Emby.Server.Implementations.Session
             IServerApplicationHost appHost,
             IDeviceManager deviceManager,
             IMediaSourceManager mediaSourceManager,
-            IHostApplicationLifetime hostApplicationLifetime)
+            IHostApplicationLifetime hostApplicationLifetime,
+            ITranscodeSessionStore transcodeSessionStore)
         {
             _logger = logger;
             _eventManager = eventManager;
@@ -116,6 +120,7 @@ namespace Emby.Server.Implementations.Session
             _appHost = appHost;
             _deviceManager = deviceManager;
             _mediaSourceManager = mediaSourceManager;
+            _transcodeSessionStore = transcodeSessionStore;
             _shutdownCallback = hostApplicationLifetime.ApplicationStopping.Register(OnApplicationStopping);
 
             _deviceManager.DeviceOptionsUpdated += OnDeviceManagerDeviceOptionsUpdated;
@@ -343,9 +348,38 @@ namespace Emby.Server.Implementations.Session
                     _activeLiveStreamSessions.TryRemove(liveStreamId, out _);
                 }
             }
+            else
+            {
+                // In-memory state is absent — this pod may have taken over from a crashed pod.
+                // Check the durable store to determine whether the live stream record exists.
+                LiveStreamSession durableRecord = null;
+                try
+                {
+                    durableRecord = await _transcodeSessionStore.TryGetLiveStreamAsync(liveStreamId, sessionIdOrPlaySessionId).ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to query live stream session {LiveStreamId}/{SessionId} from durable store.", liveStreamId, sessionIdOrPlaySessionId);
+                }
 
+                if (durableRecord is not null)
+                {
+                    liveStreamNeedsToBeClosed = true;
+                }
+            }
+
+            // Remove the durable record regardless of which code path set liveStreamNeedsToBeClosed.
             if (liveStreamNeedsToBeClosed)
             {
+                try
+                {
+                    await _transcodeSessionStore.DeleteLiveStreamAsync(liveStreamId, sessionIdOrPlaySessionId).ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to delete live stream session {LiveStreamId}/{SessionId} from durable store.", liveStreamId, sessionIdOrPlaySessionId);
+                }
+
                 try
                 {
                     await _mediaSourceManager.CloseLiveStream(liveStreamId).ConfigureAwait(false);
@@ -776,7 +810,7 @@ namespace Emby.Server.Implementations.Session
 
             if (!string.IsNullOrEmpty(info.LiveStreamId))
             {
-                UpdateLiveStreamActiveSessionMappings(info.LiveStreamId, info.SessionId, info.PlaySessionId);
+                await UpdateLiveStreamActiveSessionMappings(info.LiveStreamId, info.SessionId, info.PlaySessionId).ConfigureAwait(false);
             }
 
             var eventArgs = new PlaybackStartEventArgs
@@ -836,7 +870,7 @@ namespace Emby.Server.Implementations.Session
             return OnPlaybackProgress(info, false);
         }
 
-        private void UpdateLiveStreamActiveSessionMappings(string liveStreamId, string sessionId, string playSessionId)
+        private async Task UpdateLiveStreamActiveSessionMappings(string liveStreamId, string sessionId, string playSessionId)
         {
             var activeSessionMappings = _activeLiveStreamSessions.GetOrAdd(liveStreamId, _ => new ConcurrentDictionary<string, string>());
 
@@ -859,6 +893,26 @@ namespace Emby.Server.Implementations.Session
                 {
                     activeSessionMappings[sessionId] = string.Empty;
                 }
+            }
+
+            // Persist to the durable store so a takeover pod can discover open live streams.
+            var ownerPod = Environment.GetEnvironmentVariable("JELLYFIN_INSTANCE_ID") ?? Environment.MachineName;
+            var liveStreamSession = new LiveStreamSession
+            {
+                LiveStreamId = liveStreamId,
+                SessionId = sessionId,
+                PlaySessionId = playSessionId ?? string.Empty,
+                OwnerPod = ownerPod,
+                OpenedAtUtc = DateTime.UtcNow,
+            };
+
+            try
+            {
+                await _transcodeSessionStore.SetLiveStreamAsync(liveStreamSession).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to persist live stream session {LiveStreamId}/{SessionId} to durable store.", liveStreamId, sessionId);
             }
         }
 
@@ -904,7 +958,7 @@ namespace Emby.Server.Implementations.Session
 
             if (!string.IsNullOrEmpty(info.LiveStreamId))
             {
-                UpdateLiveStreamActiveSessionMappings(info.LiveStreamId, info.SessionId, info.PlaySessionId);
+                await UpdateLiveStreamActiveSessionMappings(info.LiveStreamId, info.SessionId, info.PlaySessionId).ConfigureAwait(false);
             }
 
             var eventArgs = new PlaybackProgressEventArgs

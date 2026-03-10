@@ -129,6 +129,100 @@ public class RedisTranscodeSessionStoreTests
     }
 
     /// <summary>
+    /// Verifies that <see cref="ITranscodeSessionStore.SetLiveStreamAsync"/> stores a live stream
+    /// record that can be retrieved by session id.
+    /// </summary>
+    [Fact]
+    [Trait("Category", "UnitTest")]
+    public async Task SetLiveStreamAsync_CanBeRetrievedBySessionId()
+    {
+        var store = new InMemoryTranscodeSessionStore();
+        var liveStream = new LiveStreamSession
+        {
+            LiveStreamId = "stream-1",
+            SessionId = "session-a",
+            PlaySessionId = "play-session-a",
+            OwnerPod = "pod-a",
+            OpenedAtUtc = DateTime.UtcNow,
+        };
+
+        await store.SetLiveStreamAsync(liveStream);
+
+        var result = await store.TryGetLiveStreamAsync("stream-1", "session-a");
+        Assert.NotNull(result);
+        Assert.Equal("session-a", result.SessionId);
+        Assert.Equal("pod-a", result.OwnerPod);
+    }
+
+    /// <summary>
+    /// Verifies that <see cref="ITranscodeSessionStore.SetLiveStreamAsync"/> stores a live stream
+    /// record that can be retrieved by play session id.
+    /// </summary>
+    [Fact]
+    [Trait("Category", "UnitTest")]
+    public async Task SetLiveStreamAsync_CanBeRetrievedByPlaySessionId()
+    {
+        var store = new InMemoryTranscodeSessionStore();
+        var liveStream = new LiveStreamSession
+        {
+            LiveStreamId = "stream-2",
+            SessionId = "session-b",
+            PlaySessionId = "play-session-b",
+            OwnerPod = "pod-a",
+            OpenedAtUtc = DateTime.UtcNow,
+        };
+
+        await store.SetLiveStreamAsync(liveStream);
+
+        var result = await store.TryGetLiveStreamAsync("stream-2", "play-session-b");
+        Assert.NotNull(result);
+        Assert.Equal("session-b", result.SessionId);
+    }
+
+    /// <summary>
+    /// Verifies that <see cref="ITranscodeSessionStore.DeleteLiveStreamAsync"/> removes the live
+    /// stream record so that subsequent lookups by either session id or play session id return null.
+    /// </summary>
+    [Fact]
+    [Trait("Category", "UnitTest")]
+    public async Task DeleteLiveStreamAsync_RemovesBothKeys()
+    {
+        var store = new InMemoryTranscodeSessionStore();
+        var liveStream = new LiveStreamSession
+        {
+            LiveStreamId = "stream-3",
+            SessionId = "session-c",
+            PlaySessionId = "play-session-c",
+            OwnerPod = "pod-a",
+            OpenedAtUtc = DateTime.UtcNow,
+        };
+
+        await store.SetLiveStreamAsync(liveStream);
+        await store.DeleteLiveStreamAsync("stream-3", "session-c");
+
+        var bySessionId = await store.TryGetLiveStreamAsync("stream-3", "session-c");
+        var byPlaySessionId = await store.TryGetLiveStreamAsync("stream-3", "play-session-c");
+
+        Assert.Null(bySessionId);
+        Assert.Null(byPlaySessionId);
+    }
+
+    /// <summary>
+    /// Verifies that <see cref="ITranscodeSessionStore.TryGetLiveStreamAsync"/> returns null when
+    /// no matching record exists.
+    /// </summary>
+    [Fact]
+    [Trait("Category", "UnitTest")]
+    public async Task TryGetLiveStreamAsync_WhenNotPresent_ReturnsNull()
+    {
+        var store = new InMemoryTranscodeSessionStore();
+
+        var result = await store.TryGetLiveStreamAsync("nonexistent-stream", "nonexistent-session");
+
+        Assert.Null(result);
+    }
+
+    /// <summary>
     /// Thread-safe, in-memory implementation of <see cref="ITranscodeSessionStore"/> used within
     /// this test class to avoid a cross-project reference to Jellyfin.MediaEncoding.Tests.
     /// </summary>
@@ -137,6 +231,7 @@ public class RedisTranscodeSessionStoreTests
         private static readonly TimeSpan DefaultLeaseDuration = TimeSpan.FromSeconds(30);
 
         private readonly Dictionary<string, TranscodeSession> _sessions = new(StringComparer.OrdinalIgnoreCase);
+        private readonly Dictionary<string, LiveStreamSession> _liveStreams = new(StringComparer.OrdinalIgnoreCase);
         private readonly Lock _lock = new();
 
         /// <inheritdoc />
@@ -223,6 +318,55 @@ public class RedisTranscodeSessionStoreTests
             }
         }
 
+        /// <inheritdoc />
+        public Task SetLiveStreamAsync(LiveStreamSession session, CancellationToken cancellationToken = default)
+        {
+            lock (_lock)
+            {
+                _liveStreams[MakeLiveStreamKey(session.LiveStreamId, session.SessionId)] = session;
+                if (!string.IsNullOrEmpty(session.PlaySessionId))
+                {
+                    _liveStreams[MakeLiveStreamKey(session.LiveStreamId, session.PlaySessionId)] = session;
+                }
+            }
+
+            return Task.CompletedTask;
+        }
+
+        /// <inheritdoc />
+        public Task<LiveStreamSession?> TryGetLiveStreamAsync(string liveStreamId, string sessionIdOrPlaySessionId, CancellationToken cancellationToken = default)
+        {
+            lock (_lock)
+            {
+                _liveStreams.TryGetValue(MakeLiveStreamKey(liveStreamId, sessionIdOrPlaySessionId), out var session);
+                return Task.FromResult(session);
+            }
+        }
+
+        /// <inheritdoc />
+        public Task DeleteLiveStreamAsync(string liveStreamId, string sessionIdOrPlaySessionId, CancellationToken cancellationToken = default)
+        {
+            lock (_lock)
+            {
+                if (_liveStreams.TryGetValue(MakeLiveStreamKey(liveStreamId, sessionIdOrPlaySessionId), out var session))
+                {
+                    _liveStreams.Remove(MakeLiveStreamKey(liveStreamId, session.SessionId));
+                    if (!string.IsNullOrEmpty(session.PlaySessionId))
+                    {
+                        _liveStreams.Remove(MakeLiveStreamKey(liveStreamId, session.PlaySessionId));
+                    }
+                }
+                else
+                {
+                    _liveStreams.Remove(MakeLiveStreamKey(liveStreamId, sessionIdOrPlaySessionId));
+                }
+            }
+
+            return Task.CompletedTask;
+        }
+
+        private static string MakeLiveStreamKey(string liveStreamId, string sessionIdOrPlaySessionId)
+            => liveStreamId + "\x00" + sessionIdOrPlaySessionId;
         private static TranscodeSession Clone(TranscodeSession source)
             => new TranscodeSession
             {

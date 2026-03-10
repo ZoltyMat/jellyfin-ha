@@ -34,4 +34,16 @@ public sealed class NullTranscodeSessionStore : ITranscodeSessionStore
     /// <inheritdoc />
     public Task<IEnumerable<TranscodeSession>> GetActiveSessionsAsync(CancellationToken cancellationToken = default)
         => Task.FromResult<IEnumerable<TranscodeSession>>(Array.Empty<TranscodeSession>());
+
+    /// <inheritdoc />
+    public Task SetLiveStreamAsync(LiveStreamSession session, CancellationToken cancellationToken = default)
+        => Task.CompletedTask;
+
+    /// <inheritdoc />
+    public Task<LiveStreamSession?> TryGetLiveStreamAsync(string liveStreamId, string sessionIdOrPlaySessionId, CancellationToken cancellationToken = default)
+        => Task.FromResult<LiveStreamSession?>(null);
+
+    /// <inheritdoc />
+    public Task DeleteLiveStreamAsync(string liveStreamId, string sessionIdOrPlaySessionId, CancellationToken cancellationToken = default)
+        => Task.CompletedTask;
 }

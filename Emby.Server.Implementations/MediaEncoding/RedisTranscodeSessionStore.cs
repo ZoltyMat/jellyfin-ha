@@ -18,6 +18,7 @@ namespace Emby.Server.Implementations.MediaEncoding;
 public sealed class RedisTranscodeSessionStore : ITranscodeSessionStore
 {
     private const string KeyPrefix = "jellyfin:transcode:";
+    private const string LiveStreamKeyPrefix = "jellyfin:livestream:";
 
     /// <summary>
     /// Lua script for atomic takeover: reads the stored session, checks whether the lease has
@@ -145,6 +146,9 @@ return 1";
 
     private static string GetKey(string playSessionId) => KeyPrefix + playSessionId;
 
+    private static string GetLiveStreamKey(string liveStreamId, string sessionIdOrPlaySessionId)
+        => LiveStreamKeyPrefix + liveStreamId + ":" + sessionIdOrPlaySessionId;
+
     /// <inheritdoc />
     public async Task<IEnumerable<TranscodeSession>> GetActiveSessionsAsync(CancellationToken cancellationToken = default)
     {
@@ -193,5 +197,74 @@ return 1";
         }
 
         return sessions;
+    }
+
+    /// <inheritdoc />
+    public async Task SetLiveStreamAsync(LiveStreamSession session, CancellationToken cancellationToken = default)
+    {
+        var key = GetLiveStreamKey(session.LiveStreamId, session.SessionId);
+        var json = JsonSerializer.Serialize(session);
+        // Live stream records use the same lease duration as transcode sessions.
+        var leaseDurationMs = (long)_options.LeaseDurationSeconds * 1000;
+        await _db.StringSetAsync(key, json, TimeSpan.FromMilliseconds(leaseDurationMs)).ConfigureAwait(false);
+
+        // Also index by play session id so the caller can look up by either key.
+        if (!string.IsNullOrEmpty(session.PlaySessionId))
+        {
+            var playKey = GetLiveStreamKey(session.LiveStreamId, session.PlaySessionId);
+            await _db.StringSetAsync(playKey, json, TimeSpan.FromMilliseconds(leaseDurationMs)).ConfigureAwait(false);
+        }
+
+        _logger.LogDebug(
+            "Set live stream session {LiveStreamId}/{SessionId} in Redis.",
+            session.LiveStreamId,
+            session.SessionId);
+    }
+
+    /// <inheritdoc />
+    public async Task<LiveStreamSession?> TryGetLiveStreamAsync(string liveStreamId, string sessionIdOrPlaySessionId, CancellationToken cancellationToken = default)
+    {
+        var key = GetLiveStreamKey(liveStreamId, sessionIdOrPlaySessionId);
+        var raw = await _db.StringGetAsync(key).ConfigureAwait(false);
+        if (!raw.HasValue)
+        {
+            return null;
+        }
+
+        return JsonSerializer.Deserialize<LiveStreamSession>(raw.ToString());
+    }
+
+    /// <inheritdoc />
+    public async Task DeleteLiveStreamAsync(string liveStreamId, string sessionIdOrPlaySessionId, CancellationToken cancellationToken = default)
+    {
+        var key = GetLiveStreamKey(liveStreamId, sessionIdOrPlaySessionId);
+        var raw = await _db.StringGetAsync(key).ConfigureAwait(false);
+        if (raw.HasValue)
+        {
+            var session = JsonSerializer.Deserialize<LiveStreamSession>(raw.ToString());
+            if (session is not null)
+            {
+                // Remove both the session-id key and the play-session-id key if present.
+                var keysToDelete = new System.Collections.Generic.List<RedisKey>
+                {
+                    GetLiveStreamKey(liveStreamId, session.SessionId)
+                };
+
+                if (!string.IsNullOrEmpty(session.PlaySessionId))
+                {
+                    keysToDelete.Add(GetLiveStreamKey(liveStreamId, session.PlaySessionId));
+                }
+
+                await _db.KeyDeleteAsync(keysToDelete.ToArray()).ConfigureAwait(false);
+                _logger.LogDebug(
+                    "Deleted live stream session {LiveStreamId}/{SessionId} from Redis.",
+                    liveStreamId,
+                    session.SessionId);
+                return;
+            }
+        }
+
+        // Fallback: delete just the key that was supplied.
+        await _db.KeyDeleteAsync(key).ConfigureAwait(false);
     }
 }

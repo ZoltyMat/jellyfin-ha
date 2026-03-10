@@ -404,6 +404,15 @@ public class DeleteTranscodeFileTaskTests
             }
         }
 
+        public Task SetLiveStreamAsync(LiveStreamSession session, CancellationToken cancellationToken = default)
+            => Task.CompletedTask;
+
+        public Task<LiveStreamSession?> TryGetLiveStreamAsync(string liveStreamId, string sessionIdOrPlaySessionId, CancellationToken cancellationToken = default)
+            => Task.FromResult<LiveStreamSession?>(null);
+
+        public Task DeleteLiveStreamAsync(string liveStreamId, string sessionIdOrPlaySessionId, CancellationToken cancellationToken = default)
+            => Task.CompletedTask;
+
         private static TranscodeSession Clone(TranscodeSession source)
             => new TranscodeSession
             {
