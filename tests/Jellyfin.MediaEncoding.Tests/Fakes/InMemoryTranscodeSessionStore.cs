@@ -18,6 +18,7 @@ public sealed class InMemoryTranscodeSessionStore : ITranscodeSessionStore
     public static readonly TimeSpan DefaultLeaseDuration = TimeSpan.FromSeconds(30);
 
     private readonly Dictionary<string, TranscodeSession> _sessions = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, LiveStreamSession> _liveStreams = new(StringComparer.OrdinalIgnoreCase);
     private readonly Lock _lock = new();
 
     /// <inheritdoc />
@@ -103,6 +104,55 @@ public sealed class InMemoryTranscodeSessionStore : ITranscodeSessionStore
         }
     }
 
+    /// <inheritdoc />
+    public Task SetLiveStreamAsync(LiveStreamSession session, CancellationToken cancellationToken = default)
+    {
+        lock (_lock)
+        {
+            _liveStreams[MakeLiveStreamKey(session.LiveStreamId, session.SessionId)] = session;
+            if (!string.IsNullOrEmpty(session.PlaySessionId))
+            {
+                _liveStreams[MakeLiveStreamKey(session.LiveStreamId, session.PlaySessionId)] = session;
+            }
+        }
+
+        return Task.CompletedTask;
+    }
+
+    /// <inheritdoc />
+    public Task<LiveStreamSession?> TryGetLiveStreamAsync(string liveStreamId, string sessionIdOrPlaySessionId, CancellationToken cancellationToken = default)
+    {
+        lock (_lock)
+        {
+            _liveStreams.TryGetValue(MakeLiveStreamKey(liveStreamId, sessionIdOrPlaySessionId), out var session);
+            return Task.FromResult(session);
+        }
+    }
+
+    /// <inheritdoc />
+    public Task DeleteLiveStreamAsync(string liveStreamId, string sessionIdOrPlaySessionId, CancellationToken cancellationToken = default)
+    {
+        lock (_lock)
+        {
+            if (_liveStreams.TryGetValue(MakeLiveStreamKey(liveStreamId, sessionIdOrPlaySessionId), out var session))
+            {
+                _liveStreams.Remove(MakeLiveStreamKey(liveStreamId, session.SessionId));
+                if (!string.IsNullOrEmpty(session.PlaySessionId))
+                {
+                    _liveStreams.Remove(MakeLiveStreamKey(liveStreamId, session.PlaySessionId));
+                }
+            }
+            else
+            {
+                _liveStreams.Remove(MakeLiveStreamKey(liveStreamId, sessionIdOrPlaySessionId));
+            }
+        }
+
+        return Task.CompletedTask;
+    }
+
+    private static string MakeLiveStreamKey(string liveStreamId, string sessionIdOrPlaySessionId)
+        => liveStreamId + "\x00" + sessionIdOrPlaySessionId;
     private static TranscodeSession Clone(TranscodeSession source)
         => new TranscodeSession
         {
