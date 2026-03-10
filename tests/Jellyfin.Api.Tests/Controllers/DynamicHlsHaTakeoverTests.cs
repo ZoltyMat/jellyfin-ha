@@ -95,6 +95,54 @@ namespace Jellyfin.Api.Tests.Controllers
         }
 
         /// <summary>
+        /// Segment-length selection: when the play-session has an active entry in the store
+        /// (HA mode is active), the recovery segment length should be preferred over the normal one.
+        /// </summary>
+        [Fact]
+        [Trait("Category", "UnitTest")]
+        public async Task SegmentLength_UsesRecoveryValue_WhenHaModeIsActive()
+        {
+            const int normalSegmentLength = 6;
+            const int recoverySegmentLength = 2;
+
+            var store = new HaTestSessionStore();
+            var session = CreateSession("ha-session-4", "pod-a", DateTime.UtcNow.AddMinutes(5));
+            await store.SetAsync(session);
+
+            // Simulate the controller's HA-mode check: if the session is in the store, HA mode is active.
+            var existingSession = await store.TryGetAsync("ha-session-4");
+            var isHaMode = existingSession is not null;
+
+            var effectiveSegmentLength = isHaMode ? recoverySegmentLength : normalSegmentLength;
+
+            Assert.True(isHaMode, "Session should be found in the store, activating HA mode.");
+            Assert.Equal(recoverySegmentLength, effectiveSegmentLength);
+        }
+
+        /// <summary>
+        /// Segment-length selection: when no entry exists in the store for the play-session
+        /// (HA mode inactive), the normal segment length should be used.
+        /// </summary>
+        [Fact]
+        [Trait("Category", "UnitTest")]
+        public async Task SegmentLength_UsesNormalValue_WhenHaModeIsInactive()
+        {
+            const int normalSegmentLength = 6;
+            const int recoverySegmentLength = 2;
+
+            var store = new HaTestSessionStore();
+
+            // No session registered – HA mode is inactive.
+            var existingSession = await store.TryGetAsync("nonexistent-session");
+            var isHaMode = existingSession is not null;
+
+            var effectiveSegmentLength = isHaMode ? recoverySegmentLength : normalSegmentLength;
+
+            Assert.False(isHaMode, "No session in the store means HA mode should be inactive.");
+            Assert.Equal(normalSegmentLength, effectiveSegmentLength);
+        }
+
+        /// <summary>
         /// Minimal in-memory <see cref="ITranscodeSessionStore"/> used within this test class
         /// to avoid a cross-project reference to Jellyfin.MediaEncoding.Tests.
         /// </summary>

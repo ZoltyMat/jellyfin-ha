@@ -25,6 +25,8 @@ public class EncodingOptions
         ThrottleDelaySeconds = 180;
         EnableSegmentDeletion = false;
         SegmentKeepSeconds = 720;
+        RecoverySegmentLengthSeconds = 2;
+        RecoverySegmentBufferCount = 5;
         EncodingThreadCount = -1;
         // This is a DRM device that is almost guaranteed to be there on every intel platform,
         // plus it's the default one in ffmpeg if you don't specify anything
@@ -123,6 +125,20 @@ public class EncodingOptions
     /// Gets or sets seconds for which segments should be kept before being deleted.
     /// </summary>
     public int SegmentKeepSeconds { get; set; }
+
+    /// <summary>
+    /// Gets or sets the HLS segment length in seconds to use when HA recovery mode is active.
+    /// Shorter segments allow a takeover pod to resume playback faster after a peer failure.
+    /// Default is <c>2</c>. Valid range is 1–6.
+    /// </summary>
+    public int RecoverySegmentLengthSeconds { get; set; }
+
+    /// <summary>
+    /// Gets or sets the number of HLS segments to keep on disk when HA recovery mode is active.
+    /// This acts as a rolling buffer that a takeover pod can serve while restarting the transcode.
+    /// Default is <c>5</c>. Valid range is 2–10.
+    /// </summary>
+    public int RecoverySegmentBufferCount { get; set; }
 
     /// <summary>
     /// Gets or sets the hardware acceleration type.

@@ -153,6 +153,7 @@ public sealed class InMemoryTranscodeSessionStore : ITranscodeSessionStore
 
     private static string MakeLiveStreamKey(string liveStreamId, string sessionIdOrPlaySessionId)
         => liveStreamId + "\x00" + sessionIdOrPlaySessionId;
+
     private static TranscodeSession Clone(TranscodeSession source)
         => new TranscodeSession
         {

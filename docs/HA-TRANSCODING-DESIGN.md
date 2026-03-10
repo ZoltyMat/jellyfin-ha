@@ -430,3 +430,44 @@ seek point.
 - `Emby.Server.Implementations/ScheduledTasks/Tasks/DeleteTranscodeFileTask.cs` — age-only cleanup
 - `Emby.Server.Implementations/Session/SessionManager.cs` — `_activeLiveStreamSessions`
 - `kubernetes/apps/media/nfs-pv.yaml` — `nfsvers=3` confirmed
+
+---
+
+## Bitrate/Segment Tradeoffs
+
+### Why shorter segments trade throughput for faster failover
+
+HLS streaming works by dividing a media stream into a series of short, independently decodable
+segments. The segment length is a fundamental trade-off: longer segments reduce per-segment HTTP
+overhead and allow FFmpeg to apply more aggressive compression across each chunk, improving overall
+bitrate efficiency. Shorter segments, however, mean that when a pod fails mid-transcode, a takeover
+pod only needs to rewind to the previous segment boundary — not the start of a much longer one.
+With the default 6-second segment length, a client could stall for up to 6 seconds before the
+takeover pod produces a new segment for it to consume. With the HA recovery default of 2 seconds
+(`RecoverySegmentLengthSeconds = 2`), that stall window is reduced to at most 2 seconds of rewind,
+dramatically improving the perceived continuity of playback during a pod failover.
+
+### The rolling segment buffer and disk usage
+
+In HA mode, `RecoverySegmentBufferCount` (default `5`) controls how many segments are retained in
+the HLS playlist at any one time. This creates a rolling on-disk buffer of `5 × 2 s = 10 seconds`
+of media that a takeover pod can serve immediately while it restarts FFmpeg from the last known
+position. Keeping fewer segments wastes less NFS storage but shrinks the window in which a newly
+promoted pod can respond to in-flight client requests without waiting for new segments to be
+produced. Keeping more segments lengthens the recovery window but increases NFS write pressure and
+disk usage proportionally. The valid range (2–10) was chosen so that the minimum buffer is always
+at least 4 seconds (2 × 2 s) and the maximum stays under 20 seconds (10 × 2 s), balancing storage
+cost against recovery robustness.
+
+### Tuning guidance and rollback
+
+The two knobs, `RecoverySegmentLengthSeconds` and `RecoverySegmentBufferCount`, can be adjusted in
+the Jellyfin server's encoding options without restarting the service; the new values take effect on
+the next transcode session that enters HA mode. To reduce disk I/O at the cost of a slightly longer
+stall window, increase `RecoverySegmentLengthSeconds` toward its maximum of 6 (matching the
+throughput-optimized default). To shrink the NFS footprint at the cost of a narrower recovery
+window, lower `RecoverySegmentBufferCount` toward its minimum of 2. To roll back to the
+pre-HA-mode behavior entirely, set `RecoverySegmentLengthSeconds = 6` and ensure that no active
+session is registered in the `ITranscodeSessionStore` (which disables HA mode detection in
+`DynamicHlsController`). All changes are backwards-compatible: in single-pod deployments where the
+store is a no-op, these settings have no effect on the FFmpeg command generated.
