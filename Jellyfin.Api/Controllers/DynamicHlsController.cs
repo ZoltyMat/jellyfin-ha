@@ -313,10 +313,25 @@ public class DynamicHlsController : BaseJellyfinApiController
                     // If the playlist doesn't already exist, startup ffmpeg
                     try
                     {
+                        // Check whether this session is already registered in the HA store (takeover scenario).
+                        var isHaMode = false;
+                        if (!string.IsNullOrEmpty(playSessionId))
+                        {
+                            try
+                            {
+                                var existingSession = await _transcodeSessionStore.TryGetAsync(playSessionId, cancellationToken).ConfigureAwait(false);
+                                isHaMode = existingSession is not null;
+                            }
+                            catch (Exception haEx)
+                            {
+                                _logger.LogWarning(haEx, "Failed to check HA mode for live-stream session {PlaySessionId}.", playSessionId);
+                            }
+                        }
+
                         job = await _transcodeManager.StartFfMpeg(
                                 state,
                                 playlistPath,
-                                GetCommandLineArguments(playlistPath, state, true, 0),
+                                GetCommandLineArguments(playlistPath, state, true, 0, isHaMode),
                                 Request.HttpContext.User.GetUserId(),
                                 TranscodingJobType,
                                 cancellationTokenSource)
@@ -1545,11 +1560,26 @@ public class DynamicHlsController : BaseJellyfinApiController
 
                     streamingRequest.StartTimeTicks = streamingRequest.CurrentRuntimeTicks;
 
+                    // Check whether this session is already registered in the HA store (takeover scenario).
+                    var isHaMode = false;
+                    if (!string.IsNullOrEmpty(streamingRequest.PlaySessionId))
+                    {
+                        try
+                        {
+                            var existingSession = await _transcodeSessionStore.TryGetAsync(streamingRequest.PlaySessionId, cancellationToken).ConfigureAwait(false);
+                            isHaMode = existingSession is not null;
+                        }
+                        catch (Exception haEx)
+                        {
+                            _logger.LogWarning(haEx, "Failed to check HA mode for segment session {PlaySessionId}.", streamingRequest.PlaySessionId);
+                        }
+                    }
+
                     state.WaitForPath = segmentPath;
                     job = await _transcodeManager.StartFfMpeg(
                         state,
                         playlistPath,
-                        GetCommandLineArguments(playlistPath, state, false, segmentId),
+                        GetCommandLineArguments(playlistPath, state, false, segmentId, isHaMode),
                         Request.HttpContext.User.GetUserId(),
                         TranscodingJobType,
                         cancellationTokenSource).ConfigureAwait(false);
@@ -1678,7 +1708,7 @@ public class DynamicHlsController : BaseJellyfinApiController
         return segments;
     }
 
-    private string GetCommandLineArguments(string outputPath, StreamState state, bool isEventPlaylist, int startNumber)
+    private string GetCommandLineArguments(string outputPath, StreamState state, bool isEventPlaylist, int startNumber, bool isHaMode = false)
     {
         var videoCodec = _encodingHelper.GetVideoEncoder(state, _encodingOptions);
         var threads = EncodingHelper.GetNumberOfThreads(state, _encodingOptions, videoCodec);
@@ -1701,10 +1731,20 @@ public class DynamicHlsController : BaseJellyfinApiController
         var outputExtension = EncodingHelper.GetSegmentFileExtension(state.Request.SegmentContainer);
         var outputTsArg = outputPrefix + "%d" + outputExtension;
 
+        // In HA mode, use shorter segments and a bounded rolling buffer for faster failover recovery.
+        // state.SegmentLength is already validated by the streaming pipeline; RecoverySegmentLengthSeconds
+        // comes from EncodingOptions (user-editable config) so it is clamped here.
+        var effectiveSegmentLength = isHaMode
+            ? Math.Clamp(_encodingOptions.RecoverySegmentLengthSeconds, 1, 6)
+            : state.SegmentLength;
+        var hlsListSize = isHaMode
+            ? Math.Clamp(_encodingOptions.RecoverySegmentBufferCount, 2, 10)
+            : 0;
+
         var segmentFormat = string.Empty;
         var segmentContainer = outputExtension.TrimStart('.');
         var inputModifier = _encodingHelper.GetInputModifier(state, _encodingOptions, segmentContainer);
-        var hlsArguments = $"-hls_playlist_type {(isEventPlaylist ? "event" : "vod")} -hls_list_size 0";
+        var hlsArguments = $"-hls_playlist_type {(isEventPlaylist ? "event" : "vod")} -hls_list_size {hlsListSize}";
 
         if (string.Equals(segmentContainer, "ts", StringComparison.OrdinalIgnoreCase))
         {
@@ -1756,10 +1796,10 @@ public class DynamicHlsController : BaseJellyfinApiController
             _encodingHelper.GetInputArgument(state, _encodingOptions, segmentContainer),
             threads,
             mapArgs,
-            GetVideoArguments(state, startNumber, isEventPlaylist, segmentContainer),
+            GetVideoArguments(state, startNumber, isEventPlaylist, segmentContainer, effectiveSegmentLength),
             GetAudioArguments(state),
             maxMuxingQueueSize,
-            state.SegmentLength.ToString(CultureInfo.InvariantCulture),
+            effectiveSegmentLength.ToString(CultureInfo.InvariantCulture),
             segmentFormat,
             startNumber.ToString(CultureInfo.InvariantCulture),
             baseUrlParam,
@@ -1901,8 +1941,9 @@ public class DynamicHlsController : BaseJellyfinApiController
     /// <param name="startNumber">The first number in the hls sequence.</param>
     /// <param name="isEventPlaylist">Whether the playlist is EVENT or VOD.</param>
     /// <param name="segmentContainer">The segment container.</param>
+    /// <param name="segmentLength">The effective segment length in seconds (overrides <see cref="StreamState.SegmentLength"/> when HA mode is active).</param>
     /// <returns>The command line arguments for video transcoding.</returns>
-    private string GetVideoArguments(StreamState state, int startNumber, bool isEventPlaylist, string segmentContainer)
+    private string GetVideoArguments(StreamState state, int startNumber, bool isEventPlaylist, string segmentContainer, int? segmentLength = null)
     {
         if (state.VideoStream is null)
         {
@@ -1977,7 +2018,7 @@ public class DynamicHlsController : BaseJellyfinApiController
             args += _encodingHelper.GetVideoQualityParam(state, codec, _encodingOptions, isEventPlaylist ? DefaultEventEncoderPreset : DefaultVodEncoderPreset);
 
             // Set the key frame params for video encoding to match the hls segment time.
-            args += _encodingHelper.GetHlsVideoKeyFrameArguments(state, codec, state.SegmentLength, isEventPlaylist, startNumber);
+            args += _encodingHelper.GetHlsVideoKeyFrameArguments(state, codec, segmentLength ?? state.SegmentLength, isEventPlaylist, startNumber);
 
             // Currently b-frames in libx265 breaks the FMP4-HLS playback on iOS, disable it for now.
             if (string.Equals(codec, "libx265", StringComparison.OrdinalIgnoreCase)
