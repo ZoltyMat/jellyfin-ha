@@ -66,6 +66,7 @@
 
   <ItemGroup>
     <PackageReference Include="Ignore" />
+    <PackageReference Include="StackExchange.Redis" />
   </ItemGroup>
 
   <ItemGroup>

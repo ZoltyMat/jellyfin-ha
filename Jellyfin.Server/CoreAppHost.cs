@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Reflection;
 using Emby.Server.Implementations;
+using Emby.Server.Implementations.MediaEncoding;
 using Emby.Server.Implementations.Session;
 using Jellyfin.Api.WebSocketListeners;
 using Jellyfin.Database.Implementations;
@@ -23,6 +24,7 @@ using MediaBrowser.Controller.Drawing;
 using MediaBrowser.Controller.Events;
 using MediaBrowser.Controller.Library;
 using MediaBrowser.Controller.Lyrics;
+using MediaBrowser.Controller.MediaEncoding;
 using MediaBrowser.Controller.Net;
 using MediaBrowser.Controller.Security;
 using MediaBrowser.Controller.Trickplay;
@@ -31,6 +33,7 @@ using MediaBrowser.Providers.Lyric;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using StackExchange.Redis;
 
 namespace Jellyfin.Server
 {
@@ -39,6 +42,8 @@ namespace Jellyfin.Server
     /// </summary>
     public class CoreAppHost : ApplicationHost
     {
+        private readonly IConfiguration _startupConfig;
+
         /// <summary>
         /// Initializes a new instance of the <see cref="CoreAppHost" /> class.
         /// </summary>
@@ -57,6 +62,7 @@ namespace Jellyfin.Server
                 options,
                 startupConfig)
         {
+            _startupConfig = startupConfig;
         }
 
         /// <inheritdoc/>
@@ -97,6 +103,31 @@ namespace Jellyfin.Server
             serviceCollection.AddSingleton<IAuthorizationContext, AuthorizationContext>();
 
             serviceCollection.AddScoped<IAuthenticationManager, AuthenticationManager>();
+
+            // Transcode session store: Redis-backed when configured, no-op otherwise.
+            serviceCollection.Configure<TranscodeStoreOptions>(_startupConfig.GetSection("Jellyfin:TranscodeStore"));
+            var redisConnectionString = _startupConfig["Jellyfin:TranscodeStore:RedisConnectionString"];
+            if (!string.IsNullOrEmpty(redisConnectionString))
+            {
+                serviceCollection.AddSingleton<IConnectionMultiplexer>(sp =>
+                {
+                    try
+                    {
+                        return ConnectionMultiplexer.Connect(redisConnectionString);
+                    }
+                    catch (Exception ex)
+                    {
+                        sp.GetRequiredService<ILogger<CoreAppHost>>()
+                            .LogError(ex, "Failed to connect to Redis. Check the Jellyfin:TranscodeStore:RedisConnectionString configuration.");
+                        throw;
+                    }
+                });
+                serviceCollection.AddSingleton<ITranscodeSessionStore, RedisTranscodeSessionStore>();
+            }
+            else
+            {
+                serviceCollection.AddSingleton<ITranscodeSessionStore, NullTranscodeSessionStore>();
+            }
 
             foreach (var type in GetExportTypes<ILyricProvider>())
             {

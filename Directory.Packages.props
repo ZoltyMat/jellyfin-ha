@@ -95,6 +95,7 @@
     <PackageVersion Include="z440.atl.core" Version="7.9.0" />
     <PackageVersion Include="TMDbLib" Version="2.3.0" />
     <PackageVersion Include="UTF.Unknown" Version="2.6.0" />
+    <PackageVersion Include="StackExchange.Redis" Version="2.8.16" />
     <PackageVersion Include="Xunit.Priority" Version="1.1.6" />
     <PackageVersion Include="xunit.runner.visualstudio" Version="2.8.2" />
     <PackageVersion Include="Xunit.SkippableFact" Version="1.5.23" />
