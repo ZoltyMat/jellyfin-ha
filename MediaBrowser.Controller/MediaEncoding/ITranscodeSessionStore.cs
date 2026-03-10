@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -59,4 +60,14 @@ public interface ITranscodeSessionStore
     /// <param name="cancellationToken">A cancellation token.</param>
     /// <returns>A <see cref="Task"/> representing the asynchronous operation.</returns>
     Task DeleteAsync(string playSessionId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Returns all currently active transcoding sessions from the store.
+    /// </summary>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    /// <returns>
+    /// An enumerable of <see cref="TranscodeSession"/> objects representing all active sessions.
+    /// Returns an empty enumerable if no sessions are active or if the store cannot be reached.
+    /// </returns>
+    Task<IEnumerable<TranscodeSession>> GetActiveSessionsAsync(CancellationToken cancellationToken = default);
 }

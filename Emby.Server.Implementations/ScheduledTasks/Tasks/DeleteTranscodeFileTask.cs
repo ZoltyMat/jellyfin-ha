@@ -5,6 +5,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using MediaBrowser.Common.Configuration;
 using MediaBrowser.Controller.IO;
+using MediaBrowser.Controller.MediaEncoding;
 using MediaBrowser.Model.Globalization;
 using MediaBrowser.Model.IO;
 using MediaBrowser.Model.Tasks;
@@ -21,6 +22,7 @@ public class DeleteTranscodeFileTask : IScheduledTask, IConfigurableScheduledTas
     private readonly IConfigurationManager _configurationManager;
     private readonly IFileSystem _fileSystem;
     private readonly ILocalizationManager _localization;
+    private readonly ITranscodeSessionStore _sessionStore;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="DeleteTranscodeFileTask"/> class.
@@ -29,16 +31,19 @@ public class DeleteTranscodeFileTask : IScheduledTask, IConfigurableScheduledTas
     /// <param name="fileSystem">Instance of the <see cref="IFileSystem"/> interface.</param>
     /// <param name="configurationManager">Instance of the <see cref="IConfigurationManager"/> interface.</param>
     /// <param name="localization">Instance of the <see cref="ILocalizationManager"/> interface.</param>
+    /// <param name="sessionStore">Instance of the <see cref="ITranscodeSessionStore"/> interface.</param>
     public DeleteTranscodeFileTask(
         ILogger<DeleteTranscodeFileTask> logger,
         IFileSystem fileSystem,
         IConfigurationManager configurationManager,
-        ILocalizationManager localization)
+        ILocalizationManager localization,
+        ITranscodeSessionStore sessionStore)
     {
         _logger = logger;
         _fileSystem = fileSystem;
         _configurationManager = configurationManager;
         _localization = localization;
+        _sessionStore = sessionStore;
     }
 
     /// <inheritdoc />
@@ -78,25 +83,39 @@ public class DeleteTranscodeFileTask : IScheduledTask, IConfigurableScheduledTas
     }
 
     /// <inheritdoc />
-    public Task ExecuteAsync(IProgress<double> progress, CancellationToken cancellationToken)
+    public async Task ExecuteAsync(IProgress<double> progress, CancellationToken cancellationToken)
     {
         var minDateModified = DateTime.UtcNow.AddDays(-1);
         progress.Report(50);
 
-        DeleteTempFilesFromDirectory(_configurationManager.GetTranscodePath(), minDateModified, progress, cancellationToken);
+        IEnumerable<TranscodeSession> activeSessions;
+        try
+        {
+            activeSessions = await _sessionStore.GetActiveSessionsAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to retrieve active transcode sessions. Skipping deletion to avoid removing files in use.");
+            progress.Report(100);
+            return;
+        }
 
-        return Task.CompletedTask;
+        DeleteTempFilesFromDirectory(_configurationManager.GetTranscodePath(), minDateModified, activeSessions, progress, cancellationToken);
     }
 
     /// <summary>
-    /// Deletes the transcoded temp files from directory with a last write time less than a given date.
+    /// Deletes the transcoded temp files from directory with a last write time less than a given date,
+    /// skipping any files that belong to an active transcode session.
     /// </summary>
     /// <param name="directory">The directory.</param>
     /// <param name="minDateModified">The min date modified.</param>
+    /// <param name="activeSessions">The currently active transcode sessions.</param>
     /// <param name="progress">The progress.</param>
     /// <param name="cancellationToken">The task cancellation token.</param>
-    private void DeleteTempFilesFromDirectory(string directory, DateTime minDateModified, IProgress<double> progress, CancellationToken cancellationToken)
+    private void DeleteTempFilesFromDirectory(string directory, DateTime minDateModified, IEnumerable<TranscodeSession> activeSessions, IProgress<double> progress, CancellationToken cancellationToken)
     {
+        var activeSessionList = activeSessions.ToList();
+
         var filesToDelete = _fileSystem.GetFiles(directory, true)
             .Where(f => _fileSystem.GetLastWriteTimeUtc(f) < minDateModified)
             .ToList();
@@ -112,6 +131,13 @@ public class DeleteTranscodeFileTask : IScheduledTask, IConfigurableScheduledTas
 
             cancellationToken.ThrowIfCancellationRequested();
 
+            if (IsFileProtectedByActiveSession(file.FullName, activeSessionList))
+            {
+                _logger.LogDebug("Skipping deletion of {FilePath} as it belongs to an active transcode session.", file.FullName);
+                index++;
+                continue;
+            }
+
             FileSystemHelper.DeleteFile(_fileSystem, file.FullName, _logger);
 
             index++;
@@ -120,5 +146,25 @@ public class DeleteTranscodeFileTask : IScheduledTask, IConfigurableScheduledTas
         FileSystemHelper.DeleteEmptyFolders(_fileSystem, directory, _logger);
 
         progress.Report(100);
+    }
+
+    private static bool IsFileProtectedByActiveSession(string filePath, IList<TranscodeSession> activeSessions)
+    {
+        foreach (var session in activeSessions)
+        {
+            if (!string.IsNullOrEmpty(session.ManifestPath) &&
+                string.Equals(filePath, session.ManifestPath, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            if (!string.IsNullOrEmpty(session.SegmentPathPrefix) &&
+                filePath.StartsWith(session.SegmentPathPrefix, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 }

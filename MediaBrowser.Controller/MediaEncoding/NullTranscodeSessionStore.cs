@@ -1,3 +1,5 @@
+using System;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -28,4 +30,8 @@ public sealed class NullTranscodeSessionStore : ITranscodeSessionStore
     /// <inheritdoc />
     public Task DeleteAsync(string playSessionId, CancellationToken cancellationToken = default)
         => Task.CompletedTask;
+
+    /// <inheritdoc />
+    public Task<IEnumerable<TranscodeSession>> GetActiveSessionsAsync(CancellationToken cancellationToken = default)
+        => Task.FromResult<IEnumerable<TranscodeSession>>(Array.Empty<TranscodeSession>());
 }

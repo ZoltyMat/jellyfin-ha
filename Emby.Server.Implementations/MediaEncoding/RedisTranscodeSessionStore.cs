@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -35,6 +37,7 @@ session['LeaseExpiresUtc'] = newTicks
 redis.call('SET', KEYS[1], cjson.encode(session), 'PX', leaseDurationMs)
 return 1";
 
+    private readonly IConnectionMultiplexer _redis;
     private readonly IDatabase _db;
     private readonly TranscodeStoreOptions _options;
     private readonly ILogger<RedisTranscodeSessionStore> _logger;
@@ -50,6 +53,7 @@ return 1";
         IOptions<TranscodeStoreOptions> options,
         ILogger<RedisTranscodeSessionStore> logger)
     {
+        _redis = redis;
         _db = redis.GetDatabase();
         _options = options.Value;
         _logger = logger;
@@ -140,4 +144,54 @@ return 1";
     }
 
     private static string GetKey(string playSessionId) => KeyPrefix + playSessionId;
+
+    /// <inheritdoc />
+    public async Task<IEnumerable<TranscodeSession>> GetActiveSessionsAsync(CancellationToken cancellationToken = default)
+    {
+        var sessions = new List<TranscodeSession>();
+        var servers = _redis.GetServers();
+
+        foreach (var server in servers)
+        {
+            if (!server.IsConnected)
+            {
+                continue;
+            }
+
+            var keys = new List<RedisKey>();
+            await foreach (var key in server.KeysAsync(database: _db.Database, pattern: KeyPrefix + "*", pageSize: 1000).WithCancellation(cancellationToken).ConfigureAwait(false))
+            {
+                keys.Add(key);
+            }
+
+            var tasks = keys.Select(key => _db.StringGetAsync(key)).ToList();
+            var values = await Task.WhenAll(tasks).ConfigureAwait(false);
+
+            foreach (var raw in values)
+            {
+                if (!raw.HasValue)
+                {
+                    continue;
+                }
+
+                TranscodeSession? session;
+                try
+                {
+                    session = JsonSerializer.Deserialize<TranscodeSession>(raw.ToString());
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Failed to deserialize transcode session from Redis.");
+                    continue;
+                }
+
+                if (session is not null)
+                {
+                    sessions.Add(session);
+                }
+            }
+        }
+
+        return sessions;
+    }
 }
