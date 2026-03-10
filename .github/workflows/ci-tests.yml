@@ -46,3 +46,57 @@ jobs:
 
       # TODO - which action / tool to use to publish code coverage results?
       # - name: Publish code coverage results
+
+  # Phase 5 transcode coverage gate — runs in parallel with run-tests.
+  # Explicitly targets the three test assemblies most affected by Phase 5 HLS
+  # session-sharing and PostgreSQL media-encoding changes so failures surface
+  # with a dedicated check status independent of the full test matrix.
+  run-phase5-tests:
+    runs-on: [self-hosted, k3s, linux, amd64]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Install .NET SDK
+        run: |
+          DOTNET_INSTALL_DIR="$HOME/.dotnet"
+          mkdir -p "$DOTNET_INSTALL_DIR"
+          curl -fsSL https://dot.net/v1/dotnet-install.sh | bash /dev/stdin --channel 10.0 --install-dir "$DOTNET_INSTALL_DIR"
+          echo "DOTNET_ROOT=$DOTNET_INSTALL_DIR" >> "$GITHUB_ENV"
+          echo "PATH=$DOTNET_INSTALL_DIR:$PATH" >> "$GITHUB_ENV"
+
+      - name: Run Phase 5 Transcode Tests (API)
+        run: |
+          export PATH="$HOME/.dotnet:$PATH"
+          dotnet test tests/Jellyfin.Api.Tests/Jellyfin.Api.Tests.csproj \
+            --configuration Release \
+            --collect:"XPlat Code Coverage" \
+            --settings tests/coverletArgs.runsettings \
+            --verbosity minimal \
+            --filter "Category!=RequiresDocker"
+
+      - name: Run Phase 5 Transcode Tests (HLS)
+        run: |
+          export PATH="$HOME/.dotnet:$PATH"
+          dotnet test tests/Jellyfin.MediaEncoding.Hls.Tests/Jellyfin.MediaEncoding.Hls.Tests.csproj \
+            --configuration Release \
+            --collect:"XPlat Code Coverage" \
+            --settings tests/coverletArgs.runsettings \
+            --verbosity minimal \
+            --filter "Category!=RequiresDocker"
+
+      - name: Run Phase 5 Transcode Tests (Server.Implementations)
+        run: |
+          export PATH="$HOME/.dotnet:$PATH"
+          dotnet test tests/Jellyfin.Server.Implementations.Tests/Jellyfin.Server.Implementations.Tests.csproj \
+            --configuration Release \
+            --collect:"XPlat Code Coverage" \
+            --settings tests/coverletArgs.runsettings \
+            --verbosity minimal \
+            --filter "Category!=RequiresDocker"
+
+      - name: Merge Phase 5 code coverage results
+        uses: danielpalme/ReportGenerator-GitHub-Action@2a7030e9775aab6c78e80cb66843051acdacee3e # v5.5.2
+        with:
+          reports: "**/coverage.cobertura.xml"
+          targetdir: "merged-phase5/"
+          reporttypes: "Cobertura"
