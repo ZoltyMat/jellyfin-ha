@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using MediaBrowser.Controller.MediaEncoding;
@@ -182,6 +183,18 @@ namespace Jellyfin.Api.Tests.Controllers
                 }
 
                 return Task.CompletedTask;
+            }
+
+            public Task<IEnumerable<TranscodeSession>> GetActiveSessionsAsync(CancellationToken cancellationToken = default)
+            {
+                lock (_lock)
+                {
+                    var sessions = _sessions.Values
+                        .Where(s => s.LeaseExpiresUtc > DateTime.UtcNow)
+                        .Select(Clone)
+                        .ToList();
+                    return Task.FromResult<IEnumerable<TranscodeSession>>(sessions);
+                }
             }
 
             private static TranscodeSession Clone(TranscodeSession source)

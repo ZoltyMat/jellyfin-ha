@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using MediaBrowser.Controller.MediaEncoding;
@@ -90,6 +91,16 @@ public sealed class InMemoryTranscodeSessionStore : ITranscodeSessionStore
         }
 
         return Task.CompletedTask;
+    }
+
+    /// <inheritdoc />
+    public Task<IEnumerable<TranscodeSession>> GetActiveSessionsAsync(CancellationToken cancellationToken = default)
+    {
+        lock (_lock)
+        {
+            var sessions = _sessions.Values.Select(Clone).ToList();
+            return Task.FromResult<IEnumerable<TranscodeSession>>(sessions);
+        }
     }
 
     private static TranscodeSession Clone(TranscodeSession source)
