@@ -60,6 +60,7 @@ public class DynamicHlsController : BaseJellyfinApiController
     private readonly IDynamicHlsPlaylistGenerator _dynamicHlsPlaylistGenerator;
     private readonly DynamicHlsHelper _dynamicHlsHelper;
     private readonly EncodingOptions _encodingOptions;
+    private readonly ITranscodeSessionStore _transcodeSessionStore;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="DynamicHlsController"/> class.
@@ -75,6 +76,7 @@ public class DynamicHlsController : BaseJellyfinApiController
     /// <param name="dynamicHlsHelper">Instance of <see cref="DynamicHlsHelper"/>.</param>
     /// <param name="encodingHelper">Instance of <see cref="EncodingHelper"/>.</param>
     /// <param name="dynamicHlsPlaylistGenerator">Instance of <see cref="IDynamicHlsPlaylistGenerator"/>.</param>
+    /// <param name="transcodeSessionStore">Instance of the <see cref="ITranscodeSessionStore"/> interface used to register and renew HLS transcoding session leases in the durable store.</param>
     public DynamicHlsController(
         ILibraryManager libraryManager,
         IUserManager userManager,
@@ -86,7 +88,8 @@ public class DynamicHlsController : BaseJellyfinApiController
         ILogger<DynamicHlsController> logger,
         DynamicHlsHelper dynamicHlsHelper,
         EncodingHelper encodingHelper,
-        IDynamicHlsPlaylistGenerator dynamicHlsPlaylistGenerator)
+        IDynamicHlsPlaylistGenerator dynamicHlsPlaylistGenerator,
+        ITranscodeSessionStore transcodeSessionStore)
     {
         _libraryManager = libraryManager;
         _userManager = userManager;
@@ -99,6 +102,7 @@ public class DynamicHlsController : BaseJellyfinApiController
         _dynamicHlsHelper = dynamicHlsHelper;
         _encodingHelper = encodingHelper;
         _dynamicHlsPlaylistGenerator = dynamicHlsPlaylistGenerator;
+        _transcodeSessionStore = transcodeSessionStore;
 
         _encodingOptions = serverConfigurationManager.GetEncodingOptions();
     }
@@ -315,6 +319,12 @@ public class DynamicHlsController : BaseJellyfinApiController
                                 cancellationTokenSource)
                             .ConfigureAwait(false);
                         job.IsLiveOutput = true;
+                        await RegisterTranscodeSessionAsync(
+                                playSessionId ?? string.Empty,
+                                mediaSourceId ?? string.Empty,
+                                cancellationToken)
+                            .ConfigureAwait(false);
+                        StartLeaseRenewal(playSessionId ?? string.Empty, cancellationToken);
                     }
                     catch
                     {
@@ -1522,6 +1532,12 @@ public class DynamicHlsController : BaseJellyfinApiController
                         Request.HttpContext.User.GetUserId(),
                         TranscodingJobType,
                         cancellationTokenSource).ConfigureAwait(false);
+                    await RegisterTranscodeSessionAsync(
+                            streamingRequest.PlaySessionId ?? string.Empty,
+                            streamingRequest.MediaSourceId ?? string.Empty,
+                            cancellationToken)
+                        .ConfigureAwait(false);
+                    StartLeaseRenewal(streamingRequest.PlaySessionId ?? string.Empty, cancellationToken);
                 }
                 catch
                 {
@@ -1548,6 +1564,77 @@ public class DynamicHlsController : BaseJellyfinApiController
 
     private static double[] GetSegmentLengths(StreamState state)
         => GetSegmentLengthsInternal(state.RunTimeTicks ?? 0, state.SegmentLength);
+
+    private async Task RegisterTranscodeSessionAsync(string playSessionId, string mediaSourceId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var session = new TranscodeSession
+            {
+                PlaySessionId = playSessionId,
+                OwnerPod = Environment.GetEnvironmentVariable("JELLYFIN_INSTANCE_ID")
+                           ?? Environment.MachineName,
+                LeaseExpiresUtc = DateTime.UtcNow.AddSeconds(30),
+                ManifestPath = string.Empty,
+                SegmentPathPrefix = string.Empty,
+                MediaSourceId = mediaSourceId,
+                LastCompletedSegmentIndex = 0,
+                LastDurablePlaybackOffset = 0L,
+            };
+            await _transcodeSessionStore.SetAsync(session, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to register HLS session {PlaySessionId} in durable store.", playSessionId);
+        }
+    }
+
+    private void StartLeaseRenewal(string playSessionId, CancellationToken cancellationToken)
+    {
+        _ = Task.Run(
+            async () =>
+            {
+                try
+                {
+                    while (!cancellationToken.IsCancellationRequested)
+                    {
+                        try
+                        {
+                            await Task.Delay(TimeSpan.FromSeconds(10), cancellationToken).ConfigureAwait(false);
+                        }
+                        catch (OperationCanceledException)
+                        {
+                            break;
+                        }
+
+                        try
+                        {
+                            await _transcodeSessionStore.RenewLeaseAsync(playSessionId, cancellationToken).ConfigureAwait(false);
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogWarning(ex, "Failed to renew lease for HLS session {PlaySessionId}.", playSessionId);
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex, "Lease renewal loop for HLS session {PlaySessionId} encountered an unexpected error.", playSessionId);
+                }
+                finally
+                {
+                    try
+                    {
+                        await _transcodeSessionStore.DeleteAsync(playSessionId, CancellationToken.None).ConfigureAwait(false);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "Failed to delete HLS session {PlaySessionId} from durable store.", playSessionId);
+                    }
+                }
+            },
+            CancellationToken.None);
+    }
 
     internal static double[] GetSegmentLengthsInternal(long runtimeTicks, int segmentlength)
     {
