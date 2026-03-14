@@ -130,41 +130,298 @@ Standard [StackExchange.Redis connection string format](https://stackexchange.gi
 
 ---
 
-## Docker / Kubernetes
+## Deployment
 
-The `Dockerfile.runtime` in this repo produces a runtime-only image. The `.NET publish` step is intended to run on the CI host (not inside Docker) for I/O performance reasons.
+> **This project is designed to run as a container.** Running it as a bare `dotnet` process is fine for development and testing, but the HA benefits only materialize when you have multiple replicas managed by a container orchestrator. Docker Compose gets you Redis + Jellyfin wired together locally. Kubernetes (k3s, k8s, or a managed cloud cluster) gets you the actual pod-death-and-recovery story.
+>
+> Don't have a Kubernetes cluster yet? [DigitalOcean Kubernetes](https://www.digitalocean.com/?refcode=b9012919f7ff&utm_campaign=Referral_Invite&utm_medium=Referral_Program&utm_source=badge) is the fastest path to a managed cluster if you don't want to run your own nodes.
+
+---
+
+### Option 1 — Local HA with Docker Compose
+
+The simplest way to test the full HA stack locally: two Jellyfin replicas sharing a Redis instance and a local volume for transcode output.
+
+```yaml
+# docker-compose.yml
+version: "3.9"
+
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+
+  jellyfin-1:
+    build:
+      context: .
+      dockerfile: Dockerfile.runtime
+    environment:
+      Jellyfin__TranscodeStore__RedisConnectionString: "redis:6379,abortConnect=false"
+      Jellyfin__TranscodeStore__LeaseDurationSeconds: "30"
+      JELLYFIN_HA_POD_NAME: "jellyfin-1"
+    volumes:
+      - ./data/config:/config
+      - ./data/media:/media:ro
+      - transcode-tmp:/transcode
+    ports:
+      - "8096:8096"
+    depends_on:
+      - redis
+
+  jellyfin-2:
+    build:
+      context: .
+      dockerfile: Dockerfile.runtime
+    environment:
+      Jellyfin__TranscodeStore__RedisConnectionString: "redis:6379,abortConnect=false"
+      Jellyfin__TranscodeStore__LeaseDurationSeconds: "30"
+      JELLYFIN_HA_POD_NAME: "jellyfin-2"
+    volumes:
+      - ./data/config:/config
+      - ./data/media:/media:ro
+      - transcode-tmp:/transcode
+    ports:
+      - "8097:8096"
+    depends_on:
+      - redis
+
+volumes:
+  transcode-tmp:
+```
+
+Build the image first (the `dotnet publish` step runs outside Docker for I/O performance):
 
 ```bash
-# Build locally
 dotnet publish Jellyfin.Server/Jellyfin.Server.csproj \
   --configuration Release \
   --runtime linux-x64 \
   --self-contained false \
   --output ./publish-output
 
-# Build image
-docker build -f Dockerfile.runtime -t jellyfin-ha:local \
-  --platform linux/amd64 .
+docker compose up
 ```
 
-**Kubernetes environment variables for HA:**
+Both replicas share the `transcode-tmp` volume and register sessions in Redis. Kill one container mid-stream (`docker kill jellyfin-1`) and the other takes over within `LeaseDurationSeconds`.
+
+---
+
+### Option 2 — Kubernetes (k3s / k8s)
+
+This is the intended production deployment. You need:
+
+1. A Kubernetes cluster (k3s, kubeadm, EKS, GKE, DigitalOcean Kubernetes, etc.)
+2. A Redis instance (in-cluster or managed)
+3. A `ReadWriteMany` storage class for shared transcode scratch space (NFS, Longhorn RWX, Ceph RBD, or a cloud-managed RWX PVC)
+
+#### Redis (in-cluster, standalone)
 
 ```yaml
-env:
-  - name: Jellyfin__TranscodeStore__RedisConnectionString
-    valueFrom:
-      secretKeyRef:
-        name: jellyfin-redis
-        key: connection-string
-  - name: Jellyfin__TranscodeStore__LeaseDurationSeconds
-    value: "30"
-  - name: JELLYFIN_HA_POD_NAME
-    valueFrom:
-      fieldRef:
-        fieldPath: metadata.name
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  namespace: jellyfin
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: redis
+  template:
+    metadata:
+      labels:
+        app: redis
+    spec:
+      containers:
+        - name: redis
+          image: redis:7-alpine
+          ports:
+            - containerPort: 6379
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  namespace: jellyfin
+spec:
+  selector:
+    app: redis
+  ports:
+    - port: 6379
 ```
 
-Shared storage (NFS, Longhorn RWX, or similar) must be mounted at the same path on all pods for segment file access to work across pod boundaries.
+#### Redis connection secret
+
+```bash
+kubectl create secret generic jellyfin-redis \
+  --namespace jellyfin \
+  --from-literal=connection-string="redis.jellyfin.svc.cluster.local:6379,abortConnect=false"
+```
+
+#### Shared transcode PVC (RWX)
+
+```yaml
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: jellyfin-transcode
+  namespace: jellyfin
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: longhorn  # or nfs-client, csi-driver-nfs, etc.
+  resources:
+    requests:
+      storage: 20Gi
+```
+
+#### Jellyfin Deployment
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jellyfin
+  namespace: jellyfin
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: jellyfin
+  template:
+    metadata:
+      labels:
+        app: jellyfin
+    spec:
+      containers:
+        - name: jellyfin
+          image: your-registry/jellyfin-ha:latest
+          ports:
+            - containerPort: 8096
+          env:
+            - name: Jellyfin__TranscodeStore__RedisConnectionString
+              valueFrom:
+                secretKeyRef:
+                  name: jellyfin-redis
+                  key: connection-string
+            - name: Jellyfin__TranscodeStore__LeaseDurationSeconds
+              value: "30"
+            - name: JELLYFIN_HA_POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+          volumeMounts:
+            - name: config
+              mountPath: /config
+            - name: media
+              mountPath: /media
+              readOnly: true
+            - name: transcode
+              mountPath: /transcode
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8096
+            initialDelaySeconds: 30
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8096
+            initialDelaySeconds: 10
+            periodSeconds: 5
+      volumes:
+        - name: config
+          persistentVolumeClaim:
+            claimName: jellyfin-config   # RWO is fine — config is single-writer
+        - name: media
+          nfs:
+            server: your-nas.local
+            path: /media
+        - name: transcode
+          persistentVolumeClaim:
+            claimName: jellyfin-transcode  # Must be RWX
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: jellyfin
+  namespace: jellyfin
+spec:
+  type: ClusterIP
+  selector:
+    app: jellyfin
+  ports:
+    - port: 8096
+      targetPort: 8096
+```
+
+#### Important: storage requirements
+
+| Volume | Access mode | Why |
+|--------|-------------|-----|
+| Config (`/config`) | `ReadWriteOnce` | One writer, SQLite DB lives here |
+| Media (`/media`) | `ReadOnlyMany` | All pods read the same library |
+| Transcode (`/transcode`) | **`ReadWriteMany`** | Pods read each other's HLS segments during takeover |
+
+The transcode volume is the critical one. If it's `ReadWriteOnce`, pod takeover will fail because Pod B cannot read the `.ts` segments Pod A wrote. Use NFS, Longhorn with RWX enabled, or a cloud-managed RWX storage class.
+
+#### Building the image
+
+```bash
+# Publish (run on host, not inside Docker)
+dotnet publish Jellyfin.Server/Jellyfin.Server.csproj \
+  --configuration Release \
+  --runtime linux-x64 \
+  --self-contained false \
+  --output ./publish-output
+
+# Build for amd64 (required for most clusters)
+docker buildx build \
+  --platform linux/amd64 \
+  --provenance=false \
+  -f Dockerfile.runtime \
+  -t your-registry/jellyfin-ha:latest \
+  --push .
+```
+
+> Note: `--provenance=false` is required if your cluster runs containerd (k3s, most kubeadm setups). Without it, Docker adds OCI attestation manifests that containerd cannot resolve.
+
+---
+
+### Option 3 — Bare dotnet (development only)
+
+For local development and testing without containers. HA mode still works — you just run two terminal sessions pointing at the same Redis and a shared local directory.
+
+**Terminal 1:**
+
+```bash
+export Jellyfin__TranscodeStore__RedisConnectionString="localhost:6379"
+export JELLYFIN_HA_POD_NAME="dev-pod-1"
+
+dotnet run --project Jellyfin.Server/Jellyfin.Server.csproj -- \
+  --datadir /tmp/jellyfin-1/data \
+  --cachedir /tmp/jellyfin-1/cache \
+  --transcodes /tmp/jellyfin-shared/transcode \
+  --webdir /usr/share/jellyfin/web \
+  --port 8096
+```
+
+**Terminal 2:**
+
+```bash
+export Jellyfin__TranscodeStore__RedisConnectionString="localhost:6379"
+export JELLYFIN_HA_POD_NAME="dev-pod-2"
+
+dotnet run --project Jellyfin.Server/Jellyfin.Server.csproj -- \
+  --datadir /tmp/jellyfin-2/data \
+  --cachedir /tmp/jellyfin-2/cache \
+  --transcodes /tmp/jellyfin-shared/transcode \
+  --webdir /usr/share/jellyfin/web \
+  --port 8097
+```
+
+Both instances share `/tmp/jellyfin-shared/transcode`. Kill one process mid-stream to test takeover. Start a local Redis with `redis-server` or `docker run -p 6379:6379 redis:7-alpine`.
 
 ---
 
