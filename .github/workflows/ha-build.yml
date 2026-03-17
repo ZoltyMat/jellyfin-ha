@@ -8,7 +8,10 @@ on:
       - "feat/ha-*"
       - "feat/phase*"
       - "copilot/*"
-  pull_request:
+  # pull_request intentionally removed: this workflow runs on self-hosted k3s
+  # runners. Allowing pull_request events from a public repo would let any
+  # internet user execute arbitrary code inside the cluster network.
+  # CI build feedback on PRs is provided by ci-tests.yml (GitHub-hosted runners).
 
 # Cancel in-progress runs when a new push arrives on the same branch.
 concurrency:
