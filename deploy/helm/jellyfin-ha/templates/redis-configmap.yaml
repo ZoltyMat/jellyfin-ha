@@ -1,0 +1,15 @@
+{{- if .Values.redis.enabled }}
+# ConfigMap holding the Redis configuration file.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "jellyfin-ha.redis.fullname" . }}-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "jellyfin-ha.labels" . | nindent 4 }}
+    app.kubernetes.io/component: redis
+data:
+  redis.conf: |
+    maxmemory {{ .Values.redis.maxmemory }}
+    maxmemory-policy {{ .Values.redis.maxmemoryPolicy }}
+{{- end }}

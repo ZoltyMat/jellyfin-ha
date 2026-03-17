@@ -1,0 +1,15 @@
+{{- if .Values.runtimeConfig.enabled }}
+# jellyfin.runtimeconfig.json ConfigMap.
+# Mount path: /jellyfin/jellyfin.runtimeconfig.json
+# Use this to set .NET runtime configuration switches (e.g. Intel QSV codec flags).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "jellyfin-ha.fullname" . }}-runtimeconfig
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "jellyfin-ha.labels" . | nindent 4 }}
+data:
+  jellyfin.runtimeconfig.json: |
+    {{- .Values.runtimeConfig.json | nindent 4 }}
+{{- end }}

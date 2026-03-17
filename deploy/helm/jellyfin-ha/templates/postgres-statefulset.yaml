@@ -1,0 +1,84 @@
+{{- if .Values.postgresql.enabled }}
+# In-cluster PostgreSQL StatefulSet — experimental.
+# The credentials secret must be created manually before first deploy:
+#
+#   kubectl create secret generic {{ .Values.postgresql.existingSecret }} \
+#     --namespace {{ .Release.Namespace }} \
+#     --from-literal=POSTGRES_USER=jellyfin \
+#     --from-literal=POSTGRES_PASSWORD=<strong-password> \
+#     --from-literal=POSTGRES_DB=jellyfin \
+#     --from-literal=DATABASE_URL="postgresql://jellyfin:<password>@{{ include "jellyfin-ha.postgres.fullname" . }}:5432/jellyfin"
+#
+# SECURITY: Do NOT add a Secret resource here. Applying this file must not
+# overwrite a live secret.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "jellyfin-ha.postgres.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "jellyfin-ha.labels" . | nindent 4 }}
+    app.kubernetes.io/component: database
+spec:
+  replicas: 1
+  serviceName: {{ include "jellyfin-ha.postgres.fullname" . }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "jellyfin-ha.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: database
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: {{ include "jellyfin-ha.name" . }}
+        app.kubernetes.io/instance: {{ .Release.Name }}
+        app.kubernetes.io/component: database
+    spec:
+      containers:
+        - name: postgres
+          image: "{{ .Values.postgresql.image.repository }}:{{ .Values.postgresql.image.tag }}"
+          imagePullPolicy: {{ .Values.postgresql.image.pullPolicy }}
+          ports:
+            - name: postgres
+              containerPort: 5432
+              protocol: TCP
+          env:
+            - name: POSTGRES_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.postgresql.existingSecret }}
+                  key: POSTGRES_USER
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.postgresql.existingSecret }}
+                  key: POSTGRES_PASSWORD
+            - name: POSTGRES_DB
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.postgresql.existingSecret }}
+                  key: POSTGRES_DB
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          resources:
+            {{- toYaml .Values.postgresql.resources | nindent 12 }}
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-U", "$(POSTGRES_USER)"]
+            initialDelaySeconds: 30
+            periodSeconds: 20
+            timeoutSeconds: 5
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "$(POSTGRES_USER)"]
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 3
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: {{ include "jellyfin-ha.postgres.fullname" . }}-data
+{{- end }}

@@ -1,0 +1,27 @@
+{{- if .Values.serviceMonitor.enabled }}
+# Prometheus ServiceMonitor.
+# Jellyfin does not expose a native /metrics endpoint. Enable this if you have
+# a Prometheus sidecar or plan to add one. The kube-state-metrics replica count
+# alert is the primary health signal for Jellyfin without a native exporter.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "jellyfin-ha.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "jellyfin-ha.labels" . | nindent 4 }}
+    {{- with .Values.serviceMonitor.additionalLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "jellyfin-ha.selectorLabels" . | nindent 6 }}
+  endpoints:
+    - port: http
+      path: {{ .Values.serviceMonitor.path }}
+      interval: {{ .Values.serviceMonitor.interval }}
+  namespaceSelector:
+    matchNames:
+      - {{ .Release.Namespace }}
+{{- end }}

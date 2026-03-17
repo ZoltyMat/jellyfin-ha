@@ -1,0 +1,22 @@
+apiVersion: v2
+name: jellyfin-ha
+description: >
+  High-availability Jellyfin media server with Redis-backed transcode session
+  store, lease-aware segment cleanup, and optional PostgreSQL database provider
+  for multi-pod Kubernetes deployments.
+type: application
+version: 0.1.0
+appVersion: "10.12.0"
+keywords:
+  - jellyfin
+  - media-server
+  - high-availability
+  - redis
+  - kubernetes
+home: https://github.com/ZoltyMat/jellyfin-ha
+sources:
+  - https://github.com/ZoltyMat/jellyfin-ha
+maintainers:
+  - name: ZoltyMat
+    url: https://github.com/ZoltyMat
+icon: https://raw.githubusercontent.com/jellyfin/jellyfin/master/Jellyfin.Server/Resources/Images/jellyfin-icon-solid.png
