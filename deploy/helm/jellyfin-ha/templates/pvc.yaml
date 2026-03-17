@@ -1,0 +1,90 @@
+{{- if not .Values.persistence.config.existingClaim }}
+# Shared config PVC — used by all Jellyfin replicas.
+# Must be ReadWriteMany when replicaCount > 1.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "jellyfin-ha.fullname" . }}-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "jellyfin-ha.labels" . | nindent 4 }}
+    app.kubernetes.io/component: storage
+spec:
+  accessModes:
+    - {{ .Values.persistence.config.accessMode }}
+  {{- if .Values.persistence.config.storageClass }}
+  storageClassName: {{ .Values.persistence.config.storageClass | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.persistence.config.size }}
+{{- end }}
+
+---
+{{- if not .Values.persistence.transcode.existingClaim }}
+# Shared transcode PVC — must be ReadWriteMany so pod takeover can read
+# HLS segments written by the previous owner pod.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "jellyfin-ha.fullname" . }}-transcode
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "jellyfin-ha.labels" . | nindent 4 }}
+    app.kubernetes.io/component: storage
+spec:
+  accessModes:
+    - {{ .Values.persistence.transcode.accessMode }}
+  {{- if .Values.persistence.transcode.storageClass }}
+  storageClassName: {{ .Values.persistence.transcode.storageClass | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.persistence.transcode.size }}
+{{- end }}
+
+---
+{{- if and .Values.persistence.media.nfs.enabled (not .Values.persistence.media.existingClaim) }}
+# NFS PersistentVolume and PersistentVolumeClaim for the media library.
+# Enable persistence.media.nfs.enabled and provide server/path to use this.
+# Alternatively, set persistence.media.existingClaim to reuse an existing PVC.
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: {{ include "jellyfin-ha.fullname" . }}-media-nfs
+  labels:
+    {{- include "jellyfin-ha.labels" . | nindent 4 }}
+    app.kubernetes.io/component: storage
+spec:
+  capacity:
+    storage: {{ .Values.persistence.media.nfs.size }}
+  accessModes:
+    - ReadOnlyMany
+  persistentVolumeReclaimPolicy: Retain
+  {{- if .Values.persistence.media.nfs.storageClass }}
+  storageClassName: {{ .Values.persistence.media.nfs.storageClass | quote }}
+  {{- end }}
+  nfs:
+    server: {{ .Values.persistence.media.nfs.server | quote }}
+    path: {{ .Values.persistence.media.nfs.path | quote }}
+    readOnly: true
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "jellyfin-ha.fullname" . }}-media
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "jellyfin-ha.labels" . | nindent 4 }}
+    app.kubernetes.io/component: storage
+spec:
+  accessModes:
+    - ReadOnlyMany
+  {{- if .Values.persistence.media.nfs.storageClass }}
+  storageClassName: {{ .Values.persistence.media.nfs.storageClass | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.persistence.media.nfs.size }}
+  volumeName: {{ include "jellyfin-ha.fullname" . }}-media-nfs
+{{- end }}
