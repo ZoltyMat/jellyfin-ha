@@ -1,0 +1,49 @@
+1. Jellyfin HA has been deployed.
+
+{{- if eq (int .Values.replicaCount) 1 }}
+⚠  replicaCount=1 — running in single-instance mode. Set replicaCount >= 2 and
+   ha.enabled=true to enable HA transcoding.
+{{- else }}
+✔  Running {{ .Values.replicaCount }} replicas.
+{{- if include "jellyfin-ha.haEnabled" . }}
+✔  HA mode: ACTIVE — transcode sessions replicated via Redis.
+{{- else }}
+⚠  HA mode: INACTIVE — NullTranscodeSessionStore in use.
+   Set redis.enabled=true (or ha.transcodeStore.redisConnectionString) to enable HA.
+{{- end }}
+{{- end }}
+
+2. Get the Jellyfin URL:
+
+{{- if .Values.ingress.enabled }}
+{{- range .Values.ingress.hosts }}
+  https://{{ .host }}/
+{{- end }}
+{{- else if .Values.traefikIngressRoute.enabled }}
+  https://{{ .Values.traefikIngressRoute.host }}/
+{{- else }}
+  Access via port-forward:
+  kubectl port-forward -n {{ .Release.Namespace }} svc/{{ include "jellyfin-ha.fullname" . }} 8096:{{ .Values.service.port }}
+  http://localhost:8096/
+{{- end }}
+
+3. PostgreSQL:
+{{- if .Values.postgresql.enabled }}
+✔  In-cluster PostgreSQL deployed. Ensure the secret "{{ .Values.postgresql.existingSecret }}"
+   exists in namespace {{ .Release.Namespace }} before starting the server.
+{{- else if eq .Values.config.databaseType "Jellyfin-PostgreSQL" }}
+⚠  config.databaseType=Jellyfin-PostgreSQL but postgresql.enabled=false.
+   Make sure you have an external PostgreSQL and the correct DATABASE_URL env var set.
+{{- else }}
+   Using SQLite (default). Enable postgresql.enabled=true for a shared database backend.
+{{- end }}
+
+4. Transcode storage:
+   The transcode PVC must be ReadWriteMany when replicaCount > 1.
+   Current accessMode: {{ .Values.persistence.transcode.accessMode }}
+{{- if and (gt (int .Values.replicaCount) 1) (ne .Values.persistence.transcode.accessMode "ReadWriteMany") }}
+
+⚠  WARNING: replicaCount > 1 but transcode accessMode is not ReadWriteMany.
+   Pod B cannot read Pod A's HLS segments during session takeover.
+   Set persistence.transcode.accessMode=ReadWriteMany or use an NFS / Longhorn RWX PVC.
+{{- end }}

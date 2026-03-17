@@ -1,0 +1,405 @@
+# Default values for jellyfin-ha.
+# This is a YAML-formatted file.
+
+# -- Override the chart name.
+nameOverride: ""
+# -- Override the full resource name prefix.
+fullnameOverride: ""
+
+# -- Number of Jellyfin replicas.
+# Set >= 2 to use HA mode. When replicaCount > 1, ha.enabled should be true
+# and a Redis connection must be configured (via redis.enabled or ha.transcodeStore.redisConnectionString).
+replicaCount: 2
+
+# -- Container image configuration.
+image:
+  repository: "your-registry/jellyfin-ha"
+  tag: "latest"
+  pullPolicy: IfNotPresent
+
+# -- Image pull secrets (e.g. for private ECR registries).
+# Example:
+#   - name: ecr-pull-secret
+imagePullSecrets: []
+
+# ---------------------------------------------------------------------------
+# HA (High-Availability) configuration
+# ---------------------------------------------------------------------------
+ha:
+  # -- Enable HA mode. When true, a Redis connection string is required
+  # (either via redis.enabled or ha.transcodeStore.redisConnectionString).
+  # When false, NullTranscodeSessionStore is used and behavior is identical
+  # to upstream Jellyfin.
+  enabled: true
+
+  transcodeStore:
+    # -- StackExchange.Redis connection string.
+    # Leave empty to auto-compose from the in-cluster Redis service when redis.enabled=true.
+    # Explicit examples:
+    #   redis:6379
+    #   redis:6379,password=secret
+    #   redis.example.com:6380,ssl=true,abortConnect=false
+    #   sentinel-host:26379,serviceName=mymaster
+    redisConnectionString: ""
+
+    # -- How long (seconds) a pod's transcode lease is valid before another pod may take over.
+    leaseDurationSeconds: 30
+
+    # -- Secret containing the Redis connection string.
+    # If set, the connection string is read from this secret instead of the value above.
+    # The secret must have a key named by existingSecret.key.
+    existingSecret: ""
+    existingSecretKey: "connection-string"
+
+# ---------------------------------------------------------------------------
+# In-cluster Redis (for transcode session store)
+# ---------------------------------------------------------------------------
+redis:
+  # -- Deploy an in-cluster Redis instance.
+  # Disable and set ha.transcodeStore.redisConnectionString to use an external Redis.
+  enabled: true
+
+  image:
+    repository: redis
+    tag: "7.4.2-alpine3.21"
+    pullPolicy: IfNotPresent
+
+  # -- Maximum memory for Redis to use.
+  maxmemory: "256mb"
+  # -- LRU eviction policy when maxmemory is reached.
+  maxmemoryPolicy: "allkeys-lru"
+
+  resources:
+    requests:
+      cpu: 25m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+
+# ---------------------------------------------------------------------------
+# Jellyfin application configuration
+# ---------------------------------------------------------------------------
+config:
+  # -- The externally-reachable URL Jellyfin reports to clients.
+  publishedServerUrl: ""
+
+  # -- Disable UDP auto-discovery (port 7359).
+  # Recommended when running multiple replicas to prevent duplicate discovery responses.
+  autoDiscovery: false
+
+  # -- Jellyfin config directory inside the container.
+  # Must differ from the data/root directory to pass Jellyfin's sanity check.
+  configDir: "/config/config"
+
+  # -- Database provider: "SQLite" (default) or "Jellyfin-PostgreSQL" (experimental).
+  # When set to "Jellyfin-PostgreSQL", an init container will inject database.xml
+  # and the postgresql.enabled section (or an external connection string) must be configured.
+  databaseType: "SQLite"
+
+  # -- Extra environment variables to set on the Jellyfin container.
+  # Example:
+  #   - name: JELLYFIN_Network__BaseUrl
+  #     value: "/jellyfin"
+  extraEnv: []
+
+# ---------------------------------------------------------------------------
+# PostgreSQL (experimental — only needed when config.databaseType = Jellyfin-PostgreSQL)
+# ---------------------------------------------------------------------------
+postgresql:
+  # -- Deploy an in-cluster PostgreSQL instance.
+  enabled: false
+
+  image:
+    repository: postgres
+    tag: "16.6-alpine3.21"
+    pullPolicy: IfNotPresent
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+
+  persistence:
+    storageClass: ""
+    size: 5Gi
+
+  # -- Name of an existing secret with PostgreSQL credentials.
+  # Required when postgresql.enabled=true. The secret must contain:
+  #   POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_DB, DATABASE_URL
+  # Create it with:
+  #   kubectl create secret generic jellyfin-postgres-credentials \
+  #     --from-literal=POSTGRES_USER=jellyfin \
+  #     --from-literal=POSTGRES_PASSWORD=<password> \
+  #     --from-literal=POSTGRES_DB=jellyfin \
+  #     --from-literal=DATABASE_URL="postgresql://jellyfin:<password>@<host>:5432/jellyfin"
+  existingSecret: "jellyfin-postgres-credentials"
+
+  service:
+    port: 5432
+
+# ---------------------------------------------------------------------------
+# GPU / hardware transcoding
+# ---------------------------------------------------------------------------
+gpu:
+  # -- Enable Intel QSV / VA-API hardware transcoding.
+  # Mounts /dev/dri from the host and sets the required security context.
+  enabled: false
+
+  intel:
+    # -- Node affinity label to prefer GPU-capable nodes.
+    nodeLabel:
+      key: gpu
+      value: intel-uhd-630
+
+    # -- Toleration for the GPU node taint.
+    toleration:
+      key: gpu
+      value: "true"
+      effect: NoSchedule
+
+  # -- Mount /dev/dri from the host (required for VA-API; implies privileged=true).
+  mountDri: true
+
+# ---------------------------------------------------------------------------
+# Persistence
+# ---------------------------------------------------------------------------
+persistence:
+  # Config volume — single-writer; RWO is fine for single-replica deployments.
+  # For multi-replica: use an RWX storage class (e.g. Longhorn RWX, NFS) or
+  # point all pods at an existing shared PVC via existingClaim.
+  config:
+    # -- Size of the config PVC.
+    size: 5Gi
+    # -- Storage class. Leave empty to use the cluster default.
+    storageClass: ""
+    # -- Access mode. Use ReadWriteMany when replicaCount > 1 and sharing one PVC.
+    accessMode: ReadWriteMany
+    # -- Reuse an existing PVC. When set, no new PVC is created.
+    existingClaim: ""
+
+  # Media volume — read-only mount shared by all pods.
+  # Configure one of: existingClaim (for an existing PVC), nfs (to create an NFS PV+PVC),
+  # or existingClaim pointing at a pre-created PVC.
+  media:
+    # -- Reuse an existing media PVC (most common for homelab NFS/Longhorn setups).
+    existingClaim: ""
+    # -- Create an NFS-backed PV and PVC for the media library.
+    nfs:
+      enabled: false
+      server: "your-nas.local"
+      path: "/media"
+      size: 1Ti
+      storageClass: ""
+
+  # Transcode volume — MUST be ReadWriteMany when replicaCount > 1 so that
+  # a recovering pod can read HLS segments written by the pod it is replacing.
+  # When replicaCount=1, ReadWriteOnce is acceptable.
+  transcode:
+    size: 30Gi
+    storageClass: ""
+    accessMode: ReadWriteMany
+    existingClaim: ""
+
+  # Per-pod cache volume — local to each pod; always RWO.
+  # Created via StatefulSet volumeClaimTemplates (one PVC per pod).
+  cache:
+    size: 30Gi
+    storageClass: ""
+
+# ---------------------------------------------------------------------------
+# Service
+# ---------------------------------------------------------------------------
+service:
+  type: ClusterIP
+  port: 8096
+  # -- Annotations for the Service resource.
+  annotations: {}
+
+# ---------------------------------------------------------------------------
+# Ingress (standard Kubernetes Ingress)
+# ---------------------------------------------------------------------------
+ingress:
+  enabled: false
+  # -- Ingress class name (e.g. "nginx", "traefik").
+  className: ""
+  annotations: {}
+    # cert-manager.io/cluster-issuer: letsencrypt-prod
+    # nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+  hosts:
+    - host: jellyfin.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+  # - secretName: jellyfin-tls
+  #   hosts:
+  #     - jellyfin.example.com
+
+# ---------------------------------------------------------------------------
+# Traefik IngressRoute (Traefik v3 CRD — used by k3s default ingress)
+# ---------------------------------------------------------------------------
+traefikIngressRoute:
+  enabled: false
+  entryPoints:
+    - websecure
+  # -- Hostname for the Traefik routing rule.
+  host: "jellyfin.example.com"
+  # -- Enable sticky session cookie (recommended for multi-replica Jellyfin).
+  sticky:
+    enabled: true
+    cookieName: "jellyfin-server-id"
+    httpOnly: true
+    secure: true
+  # -- cert-manager Certificate resource for TLS.
+  tls:
+    enabled: false
+    secretName: "jellyfin-tls"
+    clusterIssuer: "letsencrypt-prod"
+    dnsNames: []
+    # - jellyfin.example.com
+
+# ---------------------------------------------------------------------------
+# Resource requests and limits for the Jellyfin container
+# ---------------------------------------------------------------------------
+resources:
+  requests:
+    cpu: 500m
+    memory: 1Gi
+  limits:
+    cpu: "4"
+    memory: 4Gi
+
+# ---------------------------------------------------------------------------
+# Liveness and readiness probes
+# ---------------------------------------------------------------------------
+livenessProbe:
+  httpGet:
+    path: /health
+    port: http
+  initialDelaySeconds: 30
+  periodSeconds: 30
+  timeoutSeconds: 5
+  failureThreshold: 3
+
+readinessProbe:
+  httpGet:
+    path: /health
+    port: http
+  initialDelaySeconds: 10
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 3
+
+# ---------------------------------------------------------------------------
+# Security context
+# ---------------------------------------------------------------------------
+# Container-level security context.
+securityContext:
+  # -- Set to true only when GPU passthrough via /dev/dri is required.
+  # privileged=true is required for DRM ioctls (VA-API). Omit (false) for
+  # software-only transcoding.
+  privileged: false
+  # -- UID for the Jellyfin process. Use 10010 to match the svc-jellyfin NAS account
+  # when NFS root_squash is enabled.
+  runAsUser: 1000
+  runAsGroup: 1000
+
+# Pod-level security context.
+podSecurityContext:
+  # -- fsGroup ensures mounted volumes are group-writable.
+  fsGroup: 1000
+  # -- Additional groups for /dev/dri access (video=44, render=109 or 991).
+  supplementalGroups: []
+  # - 44   # video
+  # - 109  # render (legacy)
+  # - 991  # render (Debian 13 trixie)
+  seccompProfile:
+    type: RuntimeDefault
+
+# ---------------------------------------------------------------------------
+# Service account
+# ---------------------------------------------------------------------------
+serviceAccount:
+  create: false
+  name: ""
+  annotations: {}
+
+# ---------------------------------------------------------------------------
+# Pod Disruption Budget
+# ---------------------------------------------------------------------------
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+# ---------------------------------------------------------------------------
+# Pod anti-affinity (spread replicas across nodes for node-level HA)
+# ---------------------------------------------------------------------------
+podAntiAffinity:
+  enabled: true
+  # -- "preferred" won't block scheduling if nodes are insufficient.
+  # Use "required" to enforce strict cross-node placement.
+  type: preferred
+  weight: 100
+
+# ---------------------------------------------------------------------------
+# Prometheus ServiceMonitor
+# Note: Jellyfin has no native /metrics endpoint. This ServiceMonitor is
+# included for future use (e.g. if you add a sidecar exporter) or for
+# blackbox-style readiness monitoring. Disable if not using kube-prometheus-stack.
+# ---------------------------------------------------------------------------
+serviceMonitor:
+  enabled: false
+  # -- Scrape interval.
+  interval: "30s"
+  # -- Scrape path (Jellyfin does not expose Prometheus metrics natively).
+  path: /metrics
+  # -- Additional labels to add to the ServiceMonitor (e.g. to match a Prometheus release label).
+  additionalLabels: {}
+  # release: kube-prometheus-stack
+
+# ---------------------------------------------------------------------------
+# Runtime config (jellyfin.runtimeconfig.json)
+# Set dotnet runtime switches here if needed. Leave empty for defaults.
+# ---------------------------------------------------------------------------
+runtimeConfig:
+  enabled: false
+  # -- Raw JSON content for jellyfin.runtimeconfig.json.
+  # See jellyfin-runtimeconfig ConfigMap in the existing manifests for an example.
+  json: |
+    {
+      "configProperties": {}
+    }
+
+# ---------------------------------------------------------------------------
+# Extra Kubernetes resources
+# ---------------------------------------------------------------------------
+# -- Additional volumes to attach to the Jellyfin pod.
+extraVolumes: []
+# - name: my-extra-config
+#   configMap:
+#     name: my-configmap
+
+# -- Additional volume mounts for the Jellyfin container.
+extraVolumeMounts: []
+# - name: my-extra-config
+#   mountPath: /etc/my-config
+
+# -- Additional init containers.
+extraInitContainers: []
+
+# -- Annotations to add to the StatefulSet.
+annotations: {}
+# -- Annotations to add to individual pods.
+podAnnotations: {}
+# -- Labels to add to the StatefulSet.
+labels: {}
+# -- Labels to add to individual pods.
+podLabels: {}
+
+# -- Update strategy for the StatefulSet.
+updateStrategy:
+  type: RollingUpdate

@@ -1,0 +1,277 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "jellyfin-ha.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "jellyfin-ha.labels" . | nindent 4 }}
+    {{- with .Values.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  {{- with .Values.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  serviceName: {{ include "jellyfin-ha.fullname" . }}
+  updateStrategy:
+    {{- toYaml .Values.updateStrategy | nindent 4 }}
+  selector:
+    matchLabels:
+      {{- include "jellyfin-ha.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "jellyfin-ha.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "jellyfin-ha.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+
+      # ---------------------------------------------------------------------------
+      # Affinity / anti-affinity
+      # ---------------------------------------------------------------------------
+      affinity:
+        {{- if and .Values.gpu.enabled .Values.gpu.intel.nodeLabel.key }}
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              preference:
+                matchExpressions:
+                  - key: {{ .Values.gpu.intel.nodeLabel.key }}
+                    operator: In
+                    values:
+                      - {{ .Values.gpu.intel.nodeLabel.value }}
+        {{- end }}
+        {{- if .Values.podAntiAffinity.enabled }}
+        podAntiAffinity:
+          {{- if eq .Values.podAntiAffinity.type "required" }}
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchLabels:
+                  {{- include "jellyfin-ha.selectorLabels" . | nindent 18 }}
+              topologyKey: kubernetes.io/hostname
+          {{- else }}
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: {{ .Values.podAntiAffinity.weight }}
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    {{- include "jellyfin-ha.selectorLabels" . | nindent 20 }}
+                topologyKey: kubernetes.io/hostname
+          {{- end }}
+        {{- end }}
+
+      # GPU node toleration
+      {{- if .Values.gpu.enabled }}
+      tolerations:
+        - key: {{ .Values.gpu.intel.toleration.key }}
+          operator: Equal
+          value: {{ .Values.gpu.intel.toleration.value | quote }}
+          effect: {{ .Values.gpu.intel.toleration.effect }}
+      {{- end }}
+
+      # ---------------------------------------------------------------------------
+      # Init containers
+      # ---------------------------------------------------------------------------
+      initContainers:
+        {{- if eq .Values.config.databaseType "Jellyfin-PostgreSQL" }}
+        # Inject database.xml to select the PostgreSQL provider at startup.
+        - name: inject-db-config
+          image: busybox:1.37.0
+          command:
+            - sh
+            - -c
+            - |
+              mkdir -p /config/config
+              chown {{ .Values.securityContext.runAsUser }}:{{ .Values.securityContext.runAsGroup }} /config/config
+              chmod 775 /config/config
+              cat > /config/config/database.xml << 'DBEOF'
+              <?xml version="1.0" encoding="utf-8"?>
+              <DatabaseConfigurationOptions>
+                <DatabaseType>Jellyfin-PostgreSQL</DatabaseType>
+                <LockingBehavior>NoLock</LockingBehavior>
+              </DatabaseConfigurationOptions>
+              DBEOF
+              chown {{ .Values.securityContext.runAsUser }}:{{ .Values.securityContext.runAsGroup }} /config/config/database.xml
+              chmod 664 /config/config/database.xml
+              echo "database.xml injected."
+          volumeMounts:
+            - name: config
+              mountPath: /config
+        {{- end }}
+        {{- with .Values.extraInitContainers }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+
+      # ---------------------------------------------------------------------------
+      # Main container
+      # ---------------------------------------------------------------------------
+      containers:
+        - name: jellyfin
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8096
+              protocol: TCP
+          env:
+            # Pod identity — used by the Redis transcode lease store to identify this replica.
+            - name: JELLYFIN_HA_POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: JELLYFIN_INSTANCE_ID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+
+            # Disable UDP auto-discovery when running multiple replicas.
+            - name: JELLYFIN_Network__AutoDiscovery
+              value: {{ .Values.config.autoDiscovery | quote }}
+
+            # Config directory (must differ from data root; see Jellyfin sanity check).
+            - name: JELLYFIN_CONFIG_DIR
+              value: {{ .Values.config.configDir | quote }}
+
+            {{- if .Values.config.publishedServerUrl }}
+            - name: JELLYFIN_PublishedServerUrl
+              value: {{ .Values.config.publishedServerUrl | quote }}
+            {{- end }}
+
+            # ---------------------------------------------------------------------------
+            # Redis (HA transcode session store)
+            # ---------------------------------------------------------------------------
+            {{- if include "jellyfin-ha.haEnabled" . }}
+            {{- if .Values.ha.transcodeStore.existingSecret }}
+            # Connection string sourced from an existing secret.
+            - name: Jellyfin__TranscodeStore__RedisConnectionString
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.ha.transcodeStore.existingSecret }}
+                  key: {{ .Values.ha.transcodeStore.existingSecretKey }}
+            {{- else }}
+            - name: Jellyfin__TranscodeStore__RedisConnectionString
+              value: {{ include "jellyfin-ha.redisConnectionString" . | quote }}
+            {{- end }}
+            - name: Jellyfin__TranscodeStore__LeaseDurationSeconds
+              value: {{ .Values.ha.transcodeStore.leaseDurationSeconds | quote }}
+            {{- end }}
+
+            # ---------------------------------------------------------------------------
+            # PostgreSQL (experimental)
+            # ---------------------------------------------------------------------------
+            {{- if and .Values.postgresql.enabled (eq .Values.config.databaseType "Jellyfin-PostgreSQL") }}
+            - name: POSTGRES_CONNECTION_STRING
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.postgresql.existingSecret }}
+                  key: DATABASE_URL
+            {{- end }}
+
+            # ---------------------------------------------------------------------------
+            # Extra environment variables
+            # ---------------------------------------------------------------------------
+            {{- with .Values.config.extraEnv }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+
+          securityContext:
+            privileged: {{ if and .Values.gpu.enabled .Values.gpu.mountDri }}true{{ else }}{{ .Values.securityContext.privileged }}{{ end }}
+            runAsUser: {{ .Values.securityContext.runAsUser }}
+            runAsGroup: {{ .Values.securityContext.runAsGroup }}
+
+          volumeMounts:
+            - name: config
+              mountPath: /config
+            {{- if or .Values.persistence.media.existingClaim (and .Values.persistence.media.nfs.enabled) }}
+            - name: media
+              mountPath: /media
+              readOnly: true
+            {{- end }}
+            - name: transcode
+              mountPath: /config/transcodes
+            - name: cache
+              mountPath: /cache
+            {{- if and .Values.gpu.enabled .Values.gpu.mountDri }}
+            - name: dri
+              mountPath: /dev/dri
+            {{- end }}
+            {{- if .Values.runtimeConfig.enabled }}
+            - name: runtimeconfig
+              mountPath: /jellyfin/jellyfin.runtimeconfig.json
+              subPath: jellyfin.runtimeconfig.json
+              readOnly: true
+            {{- end }}
+            {{- with .Values.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+
+          livenessProbe:
+            {{- toYaml .Values.livenessProbe | nindent 12 }}
+          readinessProbe:
+            {{- toYaml .Values.readinessProbe | nindent 12 }}
+
+      # ---------------------------------------------------------------------------
+      # Volumes (static — shared across all pods)
+      # ---------------------------------------------------------------------------
+      volumes:
+        - name: config
+          persistentVolumeClaim:
+            claimName: {{ include "jellyfin-ha.configPvcName" . }}
+        - name: transcode
+          persistentVolumeClaim:
+            claimName: {{ include "jellyfin-ha.transcodePvcName" . }}
+        {{- if or .Values.persistence.media.existingClaim .Values.persistence.media.nfs.enabled }}
+        - name: media
+          persistentVolumeClaim:
+            claimName: {{ include "jellyfin-ha.mediaPvcName" . }}
+        {{- end }}
+        {{- if and .Values.gpu.enabled .Values.gpu.mountDri }}
+        - name: dri
+          hostPath:
+            path: /dev/dri
+        {{- end }}
+        {{- if .Values.runtimeConfig.enabled }}
+        - name: runtimeconfig
+          configMap:
+            name: {{ include "jellyfin-ha.fullname" . }}-runtimeconfig
+        {{- end }}
+        {{- with .Values.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+
+  # ---------------------------------------------------------------------------
+  # Per-pod volumes via volumeClaimTemplates
+  # Cache is per-pod (RWO) — each replica has an independent transcoding cache,
+  # which avoids lock contention and is safe to lose on pod termination.
+  # ---------------------------------------------------------------------------
+  volumeClaimTemplates:
+    - metadata:
+        name: cache
+        labels:
+          {{- include "jellyfin-ha.labels" . | nindent 10 }}
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        {{- if .Values.persistence.cache.storageClass }}
+        storageClassName: {{ .Values.persistence.cache.storageClass | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.persistence.cache.size }}
