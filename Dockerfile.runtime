@@ -1,7 +1,6 @@
 # syntax=docker/dockerfile:1
 # Runtime-only image — the .NET publish step runs on the CI host (runner),
-# not inside this Dockerfile. This avoids DinD overlay-on-overlay I/O throttling
-# which makes `dotnet publish` inside Docker-in-Docker prohibitively slow on k3s.
+# not inside this Dockerfile.
 
 # ── Web client stage ──────────────────────────────────────────────────────────
 # Install jellyfin-web via the official Jellyfin apt repo.
